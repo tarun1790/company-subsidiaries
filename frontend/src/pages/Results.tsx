@@ -137,6 +137,45 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
         </button>
       </div>
 
+      {company.original_query && (
+        <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Entity Classification & Parent Resolution</span>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="text-sm text-slate-500 font-medium">Original Input:</span>
+                <span className="text-base font-bold text-slate-900">"{company.original_query}"</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 font-semibold bg-white border border-slate-200 px-3 py-1 rounded-full shadow-sm flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
+                Type: {company.entity_classification || "Public Company"}
+              </span>
+              <span className="text-xs text-slate-500 font-semibold bg-white border border-slate-200 px-3 py-1 rounded-full shadow-sm flex items-center gap-1.5">
+                <Award className="h-3.5 w-3.5 text-emerald-500" />
+                Confidence: {Math.round((company.confidence || 0.95) * 100)}%
+              </span>
+            </div>
+          </div>
+          
+          {company.original_query.toLowerCase().trim() !== (company.legal_name || '').toLowerCase().trim() && (
+            <div className="bg-white border border-slate-200/60 rounded-xl p-4 flex items-center gap-3.5 shadow-sm">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                <GitBranch className="h-5 w-5" />
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Resolved Canonical Corporate Parent</span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-sm font-bold text-slate-900">{company.legal_name}</span>
+                  <span className="text-[10px] bg-indigo-50 border border-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold uppercase">Ultimate Parent</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {company.metadata_fields?.evaluation_metrics && (
         <div className="bg-slate-900 border border-slate-800 text-white rounded-xl p-5 shadow-sm space-y-4">
           <div className="flex items-center justify-between">

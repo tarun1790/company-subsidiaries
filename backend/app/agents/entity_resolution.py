@@ -30,17 +30,21 @@ class CandidateEntity(BaseModel):
 
 class CorporateGroupEntity(BaseModel):
     legal_name: str = Field(description="Name of the related entity within the corporate group.")
-    entity_type: str = Field(description="Classification: Canonical Company, Parent Company, Subsidiary, Domain Registrant, Brand, Regional Operating Entity.")
-    relationship: str = Field(description="Relationship to the canonical company (e.g., Parent of, Subsidiary of, Operating name of).")
+    entity_type: str = Field(description="Classification: Public Company, Private Company, Brand, Product, Subsidiary, Business Unit, Regional Entity, Domain, Stock Ticker.")
+    relationship: str = Field(description="Relationship to the canonical company (e.g., Parent of, Subsidiary of, Operating name of, Brand of, Product of, Business Unit of).")
 
 class ConsensusEntity(BaseModel):
     legal_name: str = Field(description="The reconciled legal corporate name.")
-    entity_classification: str = Field(description="Classification: Canonical Company, Parent Company, Subsidiary, Domain Registrant, Brand, Regional Operating Entity.")
+    entity_classification: str = Field(description="Classification: Public Company, Private Company, Brand, Product, Subsidiary, Business Unit, Regional Entity, Domain, Stock Ticker.")
     domain: Optional[str] = Field(None, description="Reconciled primary domain.")
     cik: Optional[str] = Field(None, description="Reconciled SEC CIK (10-digit).")
     ticker: Optional[str] = Field(None, description="Reconciled stock ticker.")
     hq_country: Optional[str] = Field(None, description="Reconciled headquarters country.")
-    parent_company: Optional[str] = Field(None, description="Reconciled parent company if applicable.")
+    
+    # Parent resolution mappings
+    immediate_parent: Optional[str] = Field(None, description="Immediate parent company resolved (especially if query is a Brand, Product, Business Unit, or Subsidiary).")
+    ultimate_parent: Optional[str] = Field(None, description="Ultimate parent company resolved (especially if query is a Brand, Product, Business Unit, or Subsidiary).")
+    
     confidence: float = Field(description="Overall consensus confidence score (0.0 to 1.0) based on source agreement.")
     corporate_group_entities: List[CorporateGroupEntity] = Field(default=[], description="Other verified entities belonging to this corporate group resolved in the query context.")
 
@@ -181,15 +185,15 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     structured_llm = llm.with_structured_output(ResolutionResult)
 
     system_prompt = (
-        "You are an expert corporate intelligence reconciliation manager.\n"
+        "You are an elite corporate intelligence reconciliation manager.\n"
         "Your task is to analyze raw evidence gathered from multiple independent registries and tools, "
         "reconcile candidates, and determine if consensus can be reached.\n\n"
         "Reconcilation & Prioritization Rules:\n"
-        "1. Identify the candidate entity from each source separately.\n"
-        "2. Classify the entity types: Canonical Company, Parent Company, Subsidiary, Domain Registrant, Brand, Regional Operating Entity.\n"
-        "3. Prioritize SEC EDGAR filings, official investor relations domains, and official websites over other sources when determining the canonical legal entity.\n"
-        "4. Treat WHOIS/RDAP registrant organization names as supporting metadata only, never as the canonical parent identity.\n"
-        "5. Do NOT treat multiple legal entities belonging to the same corporate group (e.g., Alphabet Inc. and Google LLC) as resolution failures. Reconcile the canonical parent as the main consensus, and capture the other related entities in `corporate_group_entities`.\n"
+        "1. Identify and classify the query input as one of: Public Company, Private Company, Brand, Product, Subsidiary, Business Unit, Regional Entity, Domain, Stock Ticker.\n"
+        "2. If the input is a Brand, Product, Business Unit, or Subsidiary, you MUST resolve both its 'immediate_parent' and 'ultimate_parent' company names.\n"
+        "3. Prioritize SEC EDGAR filings, official investor relations pages, and official corporate websites when determining the canonical legal entity.\n"
+        "4. Treat WHOIS/RDAP registrant organizations strictly as supporting metadata, never as the canonical corporate parent identity.\n"
+        "5. If multiple legal entities belong to the same corporate group (e.g. YouTube, Google LLC, Alphabet Inc.), do NOT treat this as ambiguous. Set the ultimate parent company (e.g., Alphabet Inc.) as the main consensus 'legal_name', and list the other entities and relationships in the `corporate_group_entities` list.\n"
         "6. Set is_ambiguous = True only when authoritative registries (SEC, official corporate listings) disagree on the canonical parent company and the conflict cannot be resolved with evidence.\n"
         "7. NEVER invent or guess fields; derive values strictly from the collected text evidence."
     )
@@ -290,16 +294,19 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
 
     # Successful resolution
     consensus = resolved.consensus
+    canonical_parent = consensus.ultimate_parent or consensus.legal_name
     company_info = {
         "status": "success",
-        "legal_name": consensus.legal_name,
+        "original_query": query,
+        "entity_classification": consensus.entity_classification,
+        "legal_name": canonical_parent,
         "domain": consensus.domain,
         "cik": consensus.cik,
         "ticker": consensus.ticker,
         "hq_country": consensus.hq_country,
-        "parent_company": consensus.parent_company,
+        "immediate_parent": consensus.immediate_parent,
+        "ultimate_parent": consensus.ultimate_parent,
         "confidence": consensus.confidence,
-        "entity_classification": consensus.entity_classification,
         "metadata_fields": {
             "explanation": resolved.explanation,
             "resolved_candidates": [c.dict() for c in resolved.candidates],

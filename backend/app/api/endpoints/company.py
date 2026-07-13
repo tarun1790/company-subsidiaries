@@ -94,9 +94,24 @@ async def get_company_details(company_id: uuid.UUID, db: AsyncSession = Depends(
             "edges": kg_edges
         }
 
+        company_dict = {
+            "id": str(company.id),
+            "query_name": company.query_name,
+            "legal_name": company.legal_name,
+            "cik": company.cik,
+            "ticker": company.ticker,
+            "domain": company.domain,
+            "hq_country": company.hq_country,
+            "created_at": company.created_at.isoformat() if company.created_at else None,
+            "metadata_fields": company.metadata_fields or {},
+            "original_query": (company.metadata_fields or {}).get("original_query"),
+            "entity_classification": (company.metadata_fields or {}).get("entity_classification"),
+            "confidence": (company.metadata_fields or {}).get("confidence")
+        }
+
         # Format output payload
         return {
-            "company": company,
+            "company": company_dict,
             "subsidiaries": subsidiaries,
             "knowledge_graph": knowledge_graph,
             "reports": {
@@ -210,6 +225,9 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
                             "cik": cached_company.cik,
                             "ticker": cached_company.ticker,
                             "hq_country": cached_company.hq_country,
+                            "original_query": (cached_company.metadata_fields or {}).get("original_query"),
+                            "entity_classification": (cached_company.metadata_fields or {}).get("entity_classification"),
+                            "confidence": (cached_company.metadata_fields or {}).get("confidence"),
                             "metadata_fields": cached_company.metadata_fields
                         },
                         "subsidiaries": serialized_subs,
@@ -260,6 +278,11 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
         # 2. Save results to Database
         
         # Create Company Entry
+        meta = comp_info.get("metadata_fields") or {}
+        meta["original_query"] = comp_info.get("original_query")
+        meta["entity_classification"] = comp_info.get("entity_classification")
+        meta["confidence"] = comp_info.get("confidence")
+
         db_company = Company(
             query_name=query,
             legal_name=comp_info.get("legal_name"),
@@ -267,7 +290,7 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
             ticker=comp_info.get("ticker"),
             domain=comp_info.get("domain"),
             hq_country=comp_info.get("hq_country"),
-            metadata_fields=comp_info.get("metadata_fields")
+            metadata_fields=meta
         )
         db.add(db_company)
         await db.flush() # Populate db_company.id

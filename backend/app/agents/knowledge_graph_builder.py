@@ -20,11 +20,35 @@ async def knowledge_graph_builder_agent(state: AgentState) -> AgentState:
     kg_nodes.append({
         "id": parent_id,
         "label": legal_name,
-        "type": company_info.get("entity_classification") or "Parent",
+        "type": "Parent Company",
         "country": company_info.get("hq_country") or "Global",
         "confidence": 1.0,
         "evidences": []
     })
+    
+    # Add original query input node if it is different from resolved canonical parent
+    original_query = company_info.get("original_query")
+    if original_query and original_query.lower().strip() != legal_name.lower().strip():
+        orig_id = re.sub(r"[^\w]", "", original_query.lower().strip())
+        orig_classification = company_info.get("entity_classification") or "Query Input"
+        
+        kg_nodes.append({
+            "id": orig_id,
+            "label": original_query,
+            "type": orig_classification,
+            "country": company_info.get("hq_country") or "Global",
+            "confidence": company_info.get("confidence") or 1.0,
+            "evidences": [{"source_type": "User Search Input", "source_url": "", "extracted_text": f"Original query input classified as {orig_classification}"}]
+        })
+        
+        kg_edges.append({
+            "source": parent_id,
+            "target": orig_id,
+            "relationship": f"{orig_classification} of",
+            "ownership": "100%",
+            "confidence": company_info.get("confidence") or 1.0,
+            "evidences": [{"source_type": "User Search Input", "source_url": "", "extracted_text": f"Resolved relationship to canonical parent: {legal_name}"}]
+        })
     
     # Add resolved corporate group entities as nodes and edges
     group_entities = company_info.get("metadata_fields", {}).get("corporate_group_entities") or []

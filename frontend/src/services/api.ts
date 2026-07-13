@@ -6,6 +6,9 @@ export interface Company {
   ticker?: string;
   domain?: string;
   hq_country?: string;
+  original_query?: string;
+  entity_classification?: string;
+  confidence?: number;
   metadata_fields?: Record<string, any>;
   created_at: string;
 }
