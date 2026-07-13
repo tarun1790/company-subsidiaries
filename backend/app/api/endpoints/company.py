@@ -163,8 +163,17 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
         # 1. Run multi-agent pipeline
         final_state = await execute_pipeline(query, progress_hook)
         
-        # 2. Save results to Database
         comp_info = final_state["company_info"]
+        if comp_info.get("status") == "failed":
+            await websocket.send_json({
+                "stage": "entity_resolution",
+                "log": comp_info.get("error") or "Unable to resolve company.",
+                "status": "failed"
+            })
+            await websocket.close()
+            return
+
+        # 2. Save results to Database
         
         # Create Company Entry
         db_company = Company(

@@ -28,7 +28,21 @@ def build_workflow():
 
     # Set flow sequence
     workflow.set_entry_point("entity_resolution")
-    workflow.add_edge("entity_resolution", "sec_filings")
+    
+    def decide_flow(state: AgentState) -> str:
+        comp_info = state.get("company_info", {})
+        if comp_info.get("status") == "failed":
+            return "end"
+        return "continue"
+
+    workflow.add_conditional_edges(
+        "entity_resolution",
+        decide_flow,
+        {
+            "continue": "sec_filings",
+            "end": END
+        }
+    )
     workflow.add_edge("sec_filings", "official_website")
     workflow.add_edge("official_website", "public_registry")
     workflow.add_edge("public_registry", "web_research")
