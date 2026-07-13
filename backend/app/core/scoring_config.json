@@ -1,0 +1,16 @@
+{
+  "source_authority": {
+    "sec_filings": 0.50,
+    "public_registry": 0.40,
+    "annual_report_pdf": 0.45,
+    "official_website": 0.30,
+    "dns_ssl_verification": 0.20,
+    "web_research": 0.10
+  },
+  "parameters": {
+    "cross_validation_bonus": 0.15,
+    "min_confidence": 0.05,
+    "max_confidence": 1.0,
+    "conflict_penalty": 0.25
+  }
+}

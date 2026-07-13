@@ -12,11 +12,13 @@ from app.agents.document_intelligence import document_intelligence_agent
 from app.agents.structured_entity_extraction import structured_entity_extraction_agent
 from app.agents.evidence_fusion import evidence_fusion_agent
 from app.agents.entity_normalization import entity_normalization_agent
+from app.agents.conflict_resolution import conflict_resolution_agent
 from app.agents.relationship_verification import relationship_verification_agent
 from app.agents.confidence_scoring import confidence_scoring_agent
 from app.agents.knowledge_graph_builder import knowledge_graph_builder_agent
 from app.agents.corporate_hierarchy import corporate_hierarchy_agent
 from app.agents.report_agent import report_agent
+from app.agents.evaluation_benchmark import evaluation_benchmark_agent
 from app.core.logging import logger
 
 def build_workflow():
@@ -38,11 +40,13 @@ def build_workflow():
     
     workflow.add_node("evidence_fusion", evidence_fusion_agent)
     workflow.add_node("entity_normalization", entity_normalization_agent)
+    workflow.add_node("conflict_resolution", conflict_resolution_agent)
     workflow.add_node("relationship_verification", relationship_verification_agent)
     workflow.add_node("confidence_scoring", confidence_scoring_agent)
     workflow.add_node("knowledge_graph_builder", knowledge_graph_builder_agent)
     workflow.add_node("corporate_hierarchy", corporate_hierarchy_agent)
     workflow.add_node("report_agent", report_agent)
+    workflow.add_node("evaluation_benchmark", evaluation_benchmark_agent)
 
     # Set flow sequence
     workflow.set_entry_point("entity_resolution")
@@ -72,12 +76,14 @@ def build_workflow():
     # Sequential Consolidation Pipeline flow
     workflow.add_edge("structured_entity_extraction", "evidence_fusion")
     workflow.add_edge("evidence_fusion", "entity_normalization")
-    workflow.add_edge("entity_normalization", "relationship_verification")
+    workflow.add_edge("entity_normalization", "conflict_resolution")
+    workflow.add_edge("conflict_resolution", "relationship_verification")
     workflow.add_edge("relationship_verification", "confidence_scoring")
     workflow.add_edge("confidence_scoring", "knowledge_graph_builder")
     workflow.add_edge("knowledge_graph_builder", "corporate_hierarchy")
     workflow.add_edge("corporate_hierarchy", "report_agent")
-    workflow.add_edge("report_agent", END)
+    workflow.add_edge("report_agent", "evaluation_benchmark")
+    workflow.add_edge("evaluation_benchmark", END)
 
     # Compile the graph
     return workflow.compile()
