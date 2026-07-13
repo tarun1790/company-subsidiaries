@@ -58,7 +58,7 @@ export interface PipelineMessage {
 }
 
 const getBackendUrl = () => {
-  return localStorage.getItem('backend_url') || '';
+  return localStorage.getItem('backend_url') || 'http://localhost:8000';
 };
 
 export const api = {
