@@ -2,6 +2,7 @@
 
 An enterprise-ready, multi-agent corporate intelligence auditing platform. Input any company name, ticker, domain, or branch, and the system automatically researches, resolves, normalizes, verifies, and maps its corporate subsidiary structures, rendering an interactive hierarchy tree and generating compliant PDF audit packages.
 
+[![View Live Demo](https://img.shields.io/badge/View_Live_Demo-GitHub_Pages-emerald?style=flat&logo=github)](https://tarun1790.github.io/company-subsidiaries/)
 [![Deploy to Render](https://render.com/images/deploy-to-render.svg)](https://render.com/)
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new)
 
