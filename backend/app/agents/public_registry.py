@@ -1,5 +1,6 @@
 from app.agents.state import AgentState
 from app.services.open_corporates import opencorporates
+from app.services.gleif import gleif_client
 from app.core.logging import logger
 
 async def public_registry_agent(state: AgentState) -> AgentState:
@@ -25,25 +26,51 @@ async def public_registry_agent(state: AgentState) -> AgentState:
         lookup_targets += [s["name"] for s in subsidiaries if s["name"] != legal_name][:2]
         
         for name in lookup_targets:
-            records = await opencorporates.search_company(name)
-            for rec in records:
-                # Add to discovered list
-                discovered.append({
-                    "name": rec["name"],
-                    "legal_name": rec.get("legal_name") or rec["name"],
-                    "country": rec.get("country"),
-                    "ownership": "100%", # Default registry mapping
-                    "parent": legal_name,
-                    "relationship_type": "Subsidiary",
-                    "registration_number": rec.get("registration_number"),
-                    "confidence": 0.80, # high confidence from public registry
-                    "evidences": [{
-                        "source_type": "Public Registry",
-                        "source_url": "https://opencorporates.com",
-                        "extracted_text": f"Matched registry record: {rec['name']} (Number: {rec.get('registration_number')}, Jurisdiction: {rec.get('country')})"
-                    }],
-                    "notes": rec.get("notes") or "Matched registry record."
-                })
+            # 1. OpenCorporates query
+            try:
+                records = await opencorporates.search_company(name)
+                for rec in records:
+                    discovered.append({
+                        "name": rec["name"],
+                        "legal_name": rec.get("legal_name") or rec["name"],
+                        "country": rec.get("country"),
+                        "ownership": "100%", 
+                        "parent": legal_name,
+                        "relationship_type": "Subsidiary",
+                        "registration_number": rec.get("registration_number"),
+                        "confidence": 0.80, 
+                        "evidences": [{
+                            "source_type": "Public Registry",
+                            "source_url": "https://opencorporates.com",
+                            "extracted_text": f"Matched registry record: {rec['name']} (Number: {rec.get('registration_number')}, Jurisdiction: {rec.get('country')})"
+                        }],
+                        "notes": rec.get("notes") or "Matched registry record."
+                    })
+            except Exception as oe:
+                logger.error(f"OpenCorporates registry lookup failed for {name}: {str(oe)}")
+
+            # 2. GLEIF query
+            try:
+                gleif_records = await gleif_client.search_lei(name)
+                for rec in gleif_records:
+                    discovered.append({
+                        "name": rec["name"],
+                        "legal_name": rec["legal_name"],
+                        "country": rec["country"],
+                        "ownership": "100%",
+                        "parent": legal_name,
+                        "relationship_type": "Subsidiary",
+                        "registration_number": rec["registration_number"],
+                        "confidence": 0.85,
+                        "evidences": [{
+                            "source_type": "Public Registry",
+                            "source_url": "https://www.gleif.org",
+                            "extracted_text": f"Matched GLEIF LEI Registry: {rec['name']} (LEI: {rec['registration_number']}, Country: {rec['country']})"
+                        }],
+                        "notes": rec["notes"]
+                    })
+            except Exception as ge:
+                logger.error(f"GLEIF registry lookup failed for {name}: {str(ge)}")
 
         logs.append(f"Retrieved {len(discovered)} registry matches.")
         return {

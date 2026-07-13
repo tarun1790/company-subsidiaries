@@ -5,7 +5,7 @@ import { EvidenceExplorer } from '../components/EvidenceExplorer';
 import { 
   Building2, Globe, FileDown, TreeDeciduous, 
   ListOrdered, ShieldAlert, Award, ExternalLink, 
-  MapPin, CheckCircle2, ChevronRight, HelpCircle
+  MapPin, CheckCircle2, ChevronRight, HelpCircle, Compass
 } from 'lucide-react';
 
 interface ResultsProps {
@@ -14,7 +14,7 @@ interface ResultsProps {
 }
 
 export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
-  const [activeTab, setActiveTab] = useState<'tree' | 'list' | 'evidence' | 'downloads'>('tree');
+  const [activeTab, setActiveTab] = useState<'tree' | 'subsidiaries' | 'brands' | 'acquisitions' | 'units' | 'parents' | 'evidence' | 'downloads'>('tree');
   const [selectedEntity, setSelectedEntity] = useState<Subsidiary | null>(null);
   
   // Search & Filters state
@@ -23,22 +23,58 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
 
   const { company, subsidiaries, reports } = details;
 
+  // Categorize entities based on relationship type metadata
+  const categorizedEntities = useMemo(() => {
+    const subs: Subsidiary[] = [];
+    const brands: Subsidiary[] = [];
+    const acqs: Subsidiary[] = [];
+    const units: Subsidiary[] = [];
+    const parents: Subsidiary[] = [];
+
+    subsidiaries.forEach(sub => {
+      const rel = (sub.relationship_type || '').toLowerCase().trim();
+      if (rel === 'brand') {
+        brands.push(sub);
+      } else if (rel === 'acquisition' || rel.includes('acquired')) {
+        acqs.push(sub);
+      } else if (rel.includes('division') || rel.includes('office') || rel.includes('unit') || rel.includes('segment') || rel.includes('venture')) {
+        units.push(sub);
+      } else if (rel === 'parent' || rel.includes('holding')) {
+        parents.push(sub);
+      } else {
+        subs.push(sub);
+      }
+    });
+
+    return { subs, brands, acqs, units, parents };
+  }, [subsidiaries]);
+
+  // Determine active dataset based on selected tab
+  const activeList = useMemo(() => {
+    if (activeTab === 'subsidiaries') return categorizedEntities.subs;
+    if (activeTab === 'brands') return categorizedEntities.brands;
+    if (activeTab === 'acquisitions') return categorizedEntities.acqs;
+    if (activeTab === 'units') return categorizedEntities.units;
+    if (activeTab === 'parents') return categorizedEntities.parents;
+    return [];
+  }, [activeTab, categorizedEntities]);
+
   // Calculate unique countries for filter list
   const countries = useMemo(() => {
     const list = new Set<string>();
-    subsidiaries.forEach(s => s.country && list.add(s.country));
+    activeList.forEach(s => s.country && list.add(s.country));
     return ['All', ...Array.from(list)];
-  }, [subsidiaries]);
+  }, [activeList]);
 
   // Filtered subsidiaries list
   const filteredSubs = useMemo(() => {
-    return subsidiaries.filter(sub => {
+    return activeList.filter(sub => {
       const matchesSearch = sub.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             (sub.legal_name || '').toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCountry = selectedCountry === 'All' || sub.country === selectedCountry;
       return matchesSearch && matchesCountry;
     });
-  }, [subsidiaries, searchQuery, selectedCountry]);
+  }, [activeList, searchQuery, selectedCountry]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-8">
@@ -106,15 +142,63 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
           </button>
           
           <button
-            onClick={() => setActiveTab('list')}
+            onClick={() => setActiveTab('subsidiaries')}
             className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === 'list'
+              activeTab === 'subsidiaries'
                 ? 'border-brand-900 text-brand-950'
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
             <ListOrdered className="h-4 w-4" />
-            Verified Subsidiaries ({subsidiaries.length})
+            Verified Subsidiaries ({categorizedEntities.subs.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('brands')}
+            className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'brands'
+                ? 'border-brand-900 text-brand-950'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Award className="h-4 w-4" />
+            Brands ({categorizedEntities.brands.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('acquisitions')}
+            className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'acquisitions'
+                ? 'border-brand-900 text-brand-950'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Building2 className="h-4 w-4" />
+            Acquisitions ({categorizedEntities.acqs.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('units')}
+            className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'units'
+                ? 'border-brand-900 text-brand-950'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Compass className="h-4 w-4" />
+            Business Units ({categorizedEntities.units.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('parents')}
+            className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'parents'
+                ? 'border-brand-900 text-brand-950'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Building2 className="h-4 w-4" />
+            Parent Companies ({categorizedEntities.parents.length})
           </button>
           
           <button
@@ -161,7 +245,7 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
           </div>
         )}
 
-        {activeTab === 'list' && (
+        {['subsidiaries', 'brands', 'acquisitions', 'units', 'parents'].includes(activeTab) && (
           <div className="space-y-6">
             {/* Filters panel */}
             <div className="flex flex-col sm:flex-row gap-4 bg-white border border-slate-100 rounded-xl p-4 shadow-sm">
