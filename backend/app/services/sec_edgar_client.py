@@ -1,6 +1,7 @@
 import httpx
 import json
 import re
+import os
 from typing import Optional, List, Dict, Any
 from bs4 import BeautifulSoup
 from app.core.logging import logger
@@ -22,15 +23,36 @@ class SECEdgarClient:
         if cached:
             return cached
 
+        # Try local file first to bypass DNS blocks
+        local_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "company_tickers.json"
+        )
+        data = None
+        if os.path.exists(local_path):
+            try:
+                with open(local_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info("Loaded SEC company tickers list from local cache file.")
+            except Exception as le:
+                logger.warning(f"Failed to read local SEC tickers file: {str(le)}")
+
+        if not data:
+            try:
+                # Fetch master ticker list from SEC (fallback)
+                url = "https://www.sec.gov/files/company_tickers.json"
+                response = await self.client.get(url)
+                if response.status_code == 200:
+                    data = response.json()
+                else:
+                    logger.error(f"Failed to fetch SEC ticker list: {response.status_code}")
+            except Exception as e:
+                logger.error(f"Network error fetching SEC ticker list: {str(e)}")
+
+        if not data:
+            return None
+
         try:
-            # Fetch master ticker list from SEC
-            url = "https://data.sec.gov/files/company_tickers.json"
-            response = await self.client.get(url)
-            if response.status_code != 200:
-                logger.error(f"Failed to fetch SEC ticker list: {response.status_code}")
-                return None
-            
-            data = response.json()
             search_str = name_or_ticker.strip().lower()
             
             # Exact ticker match first
