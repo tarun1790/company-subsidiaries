@@ -15,8 +15,6 @@ export const Home: React.FC<HomeProps> = ({ onSearch }) => {
     }
   };
 
-  const sampleQueries = ['Microsoft', 'stripe.com', 'Alphabet', 'Tesla', 'Starbucks UK', 'Shopify'];
-
   return (
     <div className="mx-auto max-w-4xl px-4 pt-16 pb-24 sm:px-6 lg:px-8">
       
@@ -40,7 +38,7 @@ export const Home: React.FC<HomeProps> = ({ onSearch }) => {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Enter company name, brand name, domain or branch (e.g. stripe.com)..."
+            placeholder="Enter a company name, brand, branch, or domain"
             className="w-full rounded-2xl border border-slate-200 bg-white px-6 py-4.5 pr-36 shadow-md hover:border-brand-200 focus:border-brand-500 focus:outline-none transition-all text-base text-slate-800"
           />
           <button
@@ -51,23 +49,6 @@ export const Home: React.FC<HomeProps> = ({ onSearch }) => {
             Audit Entity
           </button>
         </form>
-
-        {/* Suggestion tags */}
-        <div className="mt-5 flex flex-wrap items-center gap-2 justify-center">
-          <span className="text-xs text-slate-400 font-medium mr-1.5 flex items-center gap-1">
-            <Award className="h-3 w-3" />
-            Quick Searches:
-          </span>
-          {sampleQueries.map((q) => (
-            <button
-              key={q}
-              onClick={() => onSearch(q)}
-              className="rounded-full bg-white hover:bg-brand-50 hover:text-brand-700 hover:border-brand-200 border border-slate-200 px-3.5 py-1 text-xs font-medium text-slate-600 transition-all cursor-pointer"
-            >
-              {q}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Core Platform Pillars (Value props) */}
