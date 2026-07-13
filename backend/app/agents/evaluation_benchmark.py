@@ -81,9 +81,14 @@ async def evaluation_benchmark_agent(state: AgentState) -> AgentState:
             f"Recall={metrics['recall']}%, F1={metrics['f1_score']}%."
         )
         
+        meta = state["company_info"].get("metadata_fields") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["evaluation_metrics"] = metrics
+        
         updated_company_info = {
             **state["company_info"],
-            "evaluation_metrics": metrics
+            "metadata_fields": meta
         }
         
         return {
