@@ -90,7 +90,6 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
         
     logs.append(f"Evidence Fusion consolidated candidates count: {len(fused_subs)} (down from {len(subs)}).")
     return {
-        **state,
         "subsidiaries": fused_subs,
         "logs": logs
     }

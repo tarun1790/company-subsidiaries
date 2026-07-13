@@ -51,7 +51,11 @@ async def domain_intelligence_agent(state: AgentState) -> AgentState:
     
     if not domain:
         logs.append("No domain resolved to run domain intelligence validation on.")
-        return state
+        return {
+            "company_info": company_info,
+            "domain_results": [],
+            "logs": logs
+        }
         
     logs.append(f"Running Domain Intelligence Agent on '{domain}'...")
     logger.info(f"Domain Intelligence Agent validating domain: {domain}")

@@ -15,7 +15,10 @@ async def sec_filings_agent(state: AgentState) -> AgentState:
     
     if not cik:
         logs.append("Skipping SEC EDGAR searches (No CIK code resolved).")
-        return state
+        return {
+            "sec_results": [],
+            "logs": logs
+        }
 
     logs.append(f"Searching SEC EDGAR for CIK {cik}...")
     logger.info(f"SEC Filings Agent searching for CIK: {cik}")
@@ -27,7 +30,10 @@ async def sec_filings_agent(state: AgentState) -> AgentState:
         
         if not ten_k:
             logs.append("No 10-K filing found in recent SEC submissions.")
-            return state
+            return {
+                "sec_results": [],
+                "logs": logs
+            }
 
         accession = ten_k["accessionNumber"]
         filing_date_str = ten_k.get("filingDate")
@@ -56,7 +62,10 @@ async def sec_filings_agent(state: AgentState) -> AgentState:
         ex21_html = await sec_client.get_exhibit_21(cik, accession)
         if not ex21_html:
             logs.append("Exhibit 21 (List of Subsidiaries) was not found in the 10-K directory.")
-            return state
+            return {
+                "sec_results": [],
+                "logs": logs
+            }
             
         logs.append("Exhibit 21 downloaded. Parsing subsidiaries...")
         extracted_subs = sec_client.parse_exhibit_21_html(ex21_html)

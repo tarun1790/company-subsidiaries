@@ -38,7 +38,6 @@ async def document_discovery_agent(state: AgentState) -> AgentState:
         
     logs.append(f"Discovered {len(discovered_docs)} candidate PDF documents for analysis.")
     return {
-        **state,
         "discovered_documents": discovered_docs,
         "logs": logs
     }

@@ -69,7 +69,6 @@ async def document_intelligence_agent(state: AgentState) -> AgentState:
             
     logs.append(f"Text extraction completed for {len(document_contents)} documents.")
     return {
-        **state,
         "document_contents": document_contents,
         "logs": logs
     }

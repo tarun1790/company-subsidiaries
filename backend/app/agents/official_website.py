@@ -28,7 +28,10 @@ async def official_website_agent(state: AgentState) -> AgentState:
     
     if not domain:
         logs.append("Skipping Official Website crawler (No domain resolved).")
-        return state
+        return {
+            "website_results": [],
+            "logs": logs
+        }
 
     # Normalise URL structure
     start_url = f"https://{domain}" if not domain.startswith("http") else domain
