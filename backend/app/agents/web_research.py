@@ -12,6 +12,7 @@ class WebEntity(BaseModel):
     name: str = Field(description="Name of the subsidiary, brand, or joint venture.")
     country: Optional[str] = Field(None, description="Country of operations or headquarters.")
     relationship_type: str = Field(description="Type of entity (e.g. Subsidiary, Brand, Acquisition, Division).")
+    ownership: Optional[str] = Field("Not Publicly Disclosed", description="Ownership percentage or description if found.")
     evidence_snippet: str = Field(description="Direct snippet from the research text supporting this discovery.")
     source_citation: str = Field(description="Short description of the source (e.g. Wikipedia article, News article, Search snippet).")
 
@@ -99,7 +100,7 @@ async def web_research_agent(state: AgentState) -> AgentState:
                     "name": entity.name,
                     "legal_name": entity.name,
                     "country": entity.country,
-                    "ownership": "100%", # Default
+                    "ownership": entity.ownership or "Not Publicly Disclosed",
                     "parent": legal_name,
                     "relationship_type": entity.relationship_type,
                     "confidence": 0.65 if "wikipedia" in entity.source_citation.lower() else 0.50,
@@ -119,7 +120,6 @@ async def web_research_agent(state: AgentState) -> AgentState:
 
     logs.append(f"Extracted {len(discovered)} potential entities from web research.")
     return {
-        **state,
-        "subsidiaries": subsidiaries + discovered,
+        "search_results": discovered,
         "logs": logs
     }

@@ -183,12 +183,22 @@ class SECEdgarClient:
                 if len(cols) >= 2:
                     # Look for typical formats: [Name, Jurisdiction] or [Name, Percent, Jurisdiction]
                     name = cols[0]
-                    # Filter out header labels
-                    if any(h in name.lower() for h in ["name of", "subsidiary", "jurisdiction", "state of", "country", "incorporation"]):
+                    name_lower = name.lower()
+                    if name_lower in ["name", "company", "subsidiary", "entity", "jurisdiction", "country", "state", "ownership", "percent", "shares"]:
+                        continue
+                    if any(h in name_lower for h in ["name of", "subsidiary", "jurisdiction", "state of", "country", "incorporation", "percent owned"]):
                         continue
                     
                     jurisdiction = cols[-1]
-                    percent = cols[1] if len(cols) > 2 else "100%"
+                    
+                    # Extract ownership percentage if available, otherwise default to Not Publicly Disclosed
+                    percent = "Not Publicly Disclosed"
+                    if len(cols) > 2:
+                        for cell in cols[1:-1]:
+                            match = re.search(r'\b\d{1,3}(?:\.\d+)?\s*%\b', cell)
+                            if match:
+                                percent = match.group(0).strip()
+                                break
                     
                     # Clean name (remove extra spaces, characters)
                     clean_name = re.sub(r'\s+', ' ', name).strip()
@@ -220,7 +230,7 @@ class SECEdgarClient:
                         subsidiaries.append({
                             "name": name,
                             "country": jurisdiction,
-                            "ownership": "100%",
+                            "ownership": "Not Publicly Disclosed",
                             "relationship_type": "Subsidiary",
                             "notes": "Extracted from SEC EDGAR Exhibit 21 text line-match."
                         })

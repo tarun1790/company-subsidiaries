@@ -14,16 +14,29 @@ def get_base_name_key(name: str) -> str:
 
 async def evidence_fusion_agent(state: AgentState) -> AgentState:
     """Agent 9: Merges duplicate corporate entities, groups evidence trail matrices."""
-    subs = state.get("subsidiaries", [])
     logs = state.get("logs", [])
     legal_name = state["company_info"].get("legal_name") or state["query"]
     
     logs.append("Running Evidence Fusion Agent...")
-    logger.info(f"Evidence Fusion Agent consolidating {len(subs)} candidate items.")
+    
+    # Gather candidates from namespaced collector outputs
+    subs = []
+    subs.extend(state.get("sec_results") or [])
+    subs.extend(state.get("website_results") or [])
+    subs.extend(state.get("registry_results") or [])
+    subs.extend(state.get("search_results") or [])
+    subs.extend(state.get("domain_results") or [])
+    subs.extend(state.get("extracted_document_results") or [])
+    
+    logger.info(f"Evidence Fusion Agent consolidating {len(subs)} candidate items from all sources.")
     
     if not subs:
         logs.append("No subsidiary records found to merge.")
-        return state
+        return {
+            **state,
+            "subsidiaries": [],
+            "logs": logs
+        }
         
     parent_key = get_base_name_key(legal_name)
     grouped: Dict[str, List[Dict[str, Any]]] = {}

@@ -1,30 +1,20 @@
 import pytest
-from app.agents.verification import normalize_name
+from app.agents.evidence_fusion import get_base_name_key
 from app.services.sec_edgar_client import sec_client
+from app.agents.confidence_scoring import load_scoring_config
 
-def test_normalize_name():
-    # Suffix stripping
-    assert normalize_name("Microsoft Corporation") == "microsoft"
-    assert normalize_name("Stripe Ltd.") == "stripe"
-    assert normalize_name("Google Inc.") == "google"
-    assert normalize_name("Accenture PLC") == "accenture"
-    
-    # Case standardization
-    assert normalize_name("MICROSOFT LIMITED") == "microsoft"
-    
-    # Punctuation stripping
-    assert normalize_name("Stripe, LLC.") == "stripe"
+def test_get_base_name_key():
+    assert get_base_name_key("Microsoft Corporation") == "microsoft"
+    assert get_base_name_key("Stripe Ltd.") == "stripe"
+    assert get_base_name_key("Google Inc.") == "google"
+    assert get_base_name_key("MICROSOFT LIMITED") == "microsoft"
+    assert get_base_name_key("Stripe, LLC.") == "stripe"
 
 def test_confidence_calculations():
-    # Simple calculation mock tests based on source weights
-    # SEC (+0.50), Website (+0.30), Registry (+0.20), Web (+0.10)
-    sources_1 = ["SEC Filings", "Official Website"]
-    confidence_1 = sum([0.50 if s == "SEC Filings" else 0.30 for s in sources_1])
-    assert confidence_1 == 0.80
-
-    sources_2 = ["Official Website", "Public Registry"]
-    confidence_2 = sum([0.30 if s == "Official Website" else 0.20 for s in sources_2])
-    assert confidence_2 == 0.50
+    config = load_scoring_config()
+    auth = config["source_authority"]
+    assert auth["sec_filings"] == 0.50
+    assert auth["official_website"] == 0.30
 
 def test_sec_exhibit21_parser():
     mock_html = """

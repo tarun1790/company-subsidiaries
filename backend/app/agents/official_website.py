@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 class ExtractedSubsidiary(BaseModel):
     name: str = Field(description="Name of the subsidiary, brand, or division.")
     country: Optional[str] = Field(None, description="Country of incorporation or operations.")
-    ownership: Optional[str] = Field("100%", description="Ownership percentage or description (e.g. 50% or Joint Venture).")
+    ownership: Optional[str] = Field("Not Publicly Disclosed", description="Ownership percentage or description (e.g. 50% or Joint Venture).")
     relationship_type: str = Field(description="Type of entity: Subsidiary, Brand, Division, Office, Joint Venture.")
     evidence_quote: str = Field(description="The exact text fragment supporting this extraction.")
 
@@ -98,17 +98,14 @@ async def official_website_agent(state: AgentState) -> AgentState:
                 
         logs.append(f"Extracted {len(discovered)} potential entities from official website pages.")
         return {
-            **state,
-            "subsidiaries": subsidiaries + discovered,
+            "website_results": discovered,
             "logs": logs
         }
     except Exception as e:
         error_msg = f"Website crawling error: {str(e)}"
         logger.error(error_msg)
-        errors.append(error_msg)
-        logs.append(f"Error crawling official website: {str(e)}")
         return {
-            **state,
-            "logs": logs,
-            "errors": errors
+            "website_results": [],
+            "logs": logs + [f"Error crawling official website: {str(e)}"],
+            "errors": [error_msg]
         }

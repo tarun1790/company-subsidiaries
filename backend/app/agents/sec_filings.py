@@ -87,18 +87,15 @@ async def sec_filings_agent(state: AgentState) -> AgentState:
         logs.append(f"Extracted {len(discovered)} subsidiaries from SEC Exhibit 21.")
         
         return {
-            **state,
-            "subsidiaries": subsidiaries + discovered,
+            "sec_results": discovered,
             "logs": logs
         }
         
     except Exception as e:
         error_msg = f"SEC filings processing error: {str(e)}"
         logger.error(error_msg)
-        errors.append(error_msg)
-        logs.append(f"Error searching SEC EDGAR: {str(e)}")
         return {
-            **state,
-            "logs": logs,
-            "errors": errors
+            "sec_results": [],
+            "logs": logs + [f"Error searching SEC EDGAR: {str(e)}"],
+            "errors": [error_msg]
         }

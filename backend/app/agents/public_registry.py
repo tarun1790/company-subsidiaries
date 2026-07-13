@@ -34,7 +34,7 @@ async def public_registry_agent(state: AgentState) -> AgentState:
                         "name": rec["name"],
                         "legal_name": rec.get("legal_name") or rec["name"],
                         "country": rec.get("country"),
-                        "ownership": "100%", 
+                        "ownership": "Not Publicly Disclosed", 
                         "parent": legal_name,
                         "relationship_type": "Subsidiary",
                         "registration_number": rec.get("registration_number"),
@@ -57,7 +57,7 @@ async def public_registry_agent(state: AgentState) -> AgentState:
                         "name": rec["name"],
                         "legal_name": rec["legal_name"],
                         "country": rec["country"],
-                        "ownership": "100%",
+                        "ownership": "Not Publicly Disclosed",
                         "parent": legal_name,
                         "relationship_type": "Subsidiary",
                         "registration_number": rec["registration_number"],
@@ -74,17 +74,14 @@ async def public_registry_agent(state: AgentState) -> AgentState:
 
         logs.append(f"Retrieved {len(discovered)} registry matches.")
         return {
-            **state,
-            "subsidiaries": subsidiaries + discovered,
+            "registry_results": discovered,
             "logs": logs
         }
     except Exception as e:
         error_msg = f"Public registry search error: {str(e)}"
         logger.error(error_msg)
-        errors.append(error_msg)
-        logs.append(f"Error querying registries: {str(e)}")
         return {
-            **state,
-            "logs": logs,
-            "errors": errors
+            "registry_results": [],
+            "logs": logs + [f"Error querying registries: {str(e)}"],
+            "errors": [error_msg]
         }

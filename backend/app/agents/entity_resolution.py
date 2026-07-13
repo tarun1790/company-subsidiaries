@@ -253,7 +253,7 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
         }
         
         logs.append(
-            f"Gemini API is unreachable [Could not contact DNS servers]. Bypassing AI verification "
+            f"Gemini API is unreachable or failed to respond ({str(e)}). Bypassing AI verification "
             f"and continuing with best evidence-backed candidate: '{resolved_name}'."
         )
         

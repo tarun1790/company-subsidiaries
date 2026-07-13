@@ -40,7 +40,7 @@ class GLEIFClient:
                             "legal_name": legal_name,
                             "country": country or "Global",
                             "registration_number": lei,
-                            "ownership": "100%",
+                            "ownership": "Not Publicly Disclosed",
                             "relationship_type": "Subsidiary",
                             "notes": f"Registry source: GLEIF LEI code: {lei}. Status: {status}."
                         })
