@@ -78,6 +78,16 @@ const MOCK_COMPANIES: Company[] = [
     domain: "microsoft.com",
     hq_country: "United States",
     created_at: new Date(Date.now() - 3600000 * 2).toISOString()
+  },
+  {
+    id: "mock-uuid-amazon",
+    query_name: "Amazon",
+    legal_name: "Amazon.com, Inc.",
+    cik: "0001018724",
+    ticker: "AMZN",
+    domain: "amazon.com",
+    hq_country: "United States",
+    created_at: new Date().toISOString()
   }
 ];
 
@@ -194,6 +204,61 @@ const MOCK_MICROSOFT_DETAILS: CompanyDetails = {
   }
 };
 
+const MOCK_AMAZON_DETAILS: CompanyDetails = {
+  company: MOCK_COMPANIES[2],
+  subsidiaries: [
+    {
+      name: "Amazon Web Services, Inc.",
+      legal_name: "Amazon Web Services, Inc.",
+      country: "United States",
+      ownership: "100%",
+      parent: "Amazon.com, Inc.",
+      relationship_type: "Subsidiary",
+      confidence: 1.0,
+      notes: "Cloud infrastructure and web operations branch.",
+      depth: 1,
+      evidences: [
+        { source_type: "SEC Filings", source_url: "https://sec.gov", extracted_text: "Amazon Web Services, Inc. listed in Exhibit 21 of 10-K." },
+        { source_type: "Official Website", source_url: "https://aws.amazon.com", extracted_text: "AWS is an Amazon.com company." }
+      ]
+    },
+    {
+      name: "Whole Foods Market, Inc.",
+      legal_name: "Whole Foods Market, Inc.",
+      country: "United States",
+      ownership: "100%",
+      parent: "Amazon.com, Inc.",
+      relationship_type: "Subsidiary",
+      confidence: 1.0,
+      notes: "Acquired grocery store chain.",
+      depth: 1,
+      evidences: [
+        { source_type: "Annual Report PDF", source_url: "https://amazon.com", extracted_text: "Whole Foods Market operates as a subsidiary of Amazon." }
+      ]
+    },
+    {
+      name: "Twitch Interactive, Inc.",
+      legal_name: "Twitch Interactive, Incorporated",
+      country: "United States",
+      ownership: "100%",
+      parent: "Amazon.com, Inc.",
+      relationship_type: "Subsidiary",
+      confidence: 0.95,
+      notes: "Live video streaming service provider.",
+      depth: 1,
+      evidences: [
+        { source_type: "Web Research", source_url: "https://wikipedia.org", extracted_text: "Twitch was acquired by Amazon for $970 million." }
+      ]
+    }
+  ],
+  reports: {
+    pdf: "#",
+    excel: "#",
+    csv: "#",
+    json: "#"
+  }
+};
+
 const isGithubPages = () => {
   return window.location.hostname.includes('github.io');
 };
@@ -215,7 +280,9 @@ export const api = {
 
   async getCompanyDetails(id: string): Promise<CompanyDetails> {
     if (isGithubPages() || id.startsWith("mock-uuid")) {
-      return id === "mock-uuid-stripe" ? MOCK_STRIPE_DETAILS : MOCK_MICROSOFT_DETAILS;
+      if (id === "mock-uuid-stripe") return MOCK_STRIPE_DETAILS;
+      if (id === "mock-uuid-amazon") return MOCK_AMAZON_DETAILS;
+      return MOCK_MICROSOFT_DETAILS;
     }
     try {
       const res = await fetch(`/api/companies/${id}`);
@@ -223,7 +290,9 @@ export const api = {
       return await res.json();
     } catch {
       console.warn("API server unreachable. Loading mock details.");
-      return id.includes("stripe") ? MOCK_STRIPE_DETAILS : MOCK_MICROSOFT_DETAILS;
+      if (id.includes("stripe")) return MOCK_STRIPE_DETAILS;
+      if (id.includes("amazon")) return MOCK_AMAZON_DETAILS;
+      return MOCK_MICROSOFT_DETAILS;
     }
   },
 
@@ -277,15 +346,22 @@ export const api = {
 
 // Pipeline Simulators for GitHub Pages demo mode
 function simulatePipeline(query: string, onMessage: (msg: PipelineMessage) => void) {
+  const isStripe = query.toLowerCase().includes("stripe");
+  const isAmazon = query.toLowerCase().includes("amazon");
+
+  const resolvedName = isStripe ? "Stripe, Inc." : isAmazon ? "Amazon.com, Inc." : "Microsoft Corporation";
+  const cik = isStripe ? "N/A" : isAmazon ? "0001018724" : "0000789019";
+  const domain = isStripe ? "stripe.com" : isAmazon ? "amazon.com" : "microsoft.com";
+
   const steps = [
     { stage: "entity_resolution", log: `Resolving Company: '${query}'...` },
-    { stage: "entity_resolution", log: "Resolved legal name: 'Microsoft Corporation' (Confidence: 99%)" },
-    { stage: "sec_filings", log: "Searching SEC EDGAR for CIK 0000789019..." },
+    { stage: "entity_resolution", log: `Resolved legal name: '${resolvedName}' (Confidence: 99%)` },
+    { stage: "sec_filings", log: `Searching SEC EDGAR for CIK ${cik}...` },
     { stage: "sec_filings", log: "Found 10-K filing. Downloading Exhibit 21..." },
-    { stage: "sec_filings", log: "Extracted 3 subsidiaries from SEC Exhibit 21." },
-    { stage: "official_website", log: "Crawling corporate links on microsoft.com..." },
-    { stage: "official_website", log: "Scraping page: https://microsoft.com/about..." },
-    { stage: "public_registry", log: "Searching public registries for 'Microsoft Corporation'..." },
+    { stage: "sec_filings", log: "Extracted subsidiaries from SEC Exhibit 21." },
+    { stage: "official_website", log: `Crawling corporate links on ${domain}...` },
+    { stage: "official_website", log: `Scraping page: https://${domain}/about...` },
+    { stage: "public_registry", log: `Searching public registries for '${resolvedName}'...` },
     { stage: "web_research", log: "Running Web Research Agent (Wikipedia, SSL Certificates, Web Search)..." },
     { stage: "doc_extraction", log: "Parsing PDF Documents..." },
     { stage: "verification", log: "Merging & Normalizing Evidence..." },
@@ -306,18 +382,17 @@ function simulatePipeline(query: string, onMessage: (msg: PipelineMessage) => vo
     } else {
       clearInterval(interval);
       // Final message: return results
-      const isStripe = query.toLowerCase().includes("stripe");
-      const details = isStripe ? MOCK_STRIPE_DETAILS : MOCK_MICROSOFT_DETAILS;
+      const details = isStripe ? MOCK_STRIPE_DETAILS : isAmazon ? MOCK_AMAZON_DETAILS : MOCK_MICROSOFT_DETAILS;
       
       onMessage({
         stage: "done",
         log: "DEMO MODE: Results loaded from local data storage.",
         status: 'complete',
-        company_id: isStripe ? "mock-uuid-stripe" : "mock-uuid-microsoft",
+        company_id: isStripe ? "mock-uuid-stripe" : isAmazon ? "mock-uuid-amazon" : "mock-uuid-microsoft",
         company_info: details.company,
         subsidiaries: details.subsidiaries,
         reports: details.reports
       });
     }
-  }, 1500);
+  }, 1000); // 1s interval for snappy loading experience
 }
