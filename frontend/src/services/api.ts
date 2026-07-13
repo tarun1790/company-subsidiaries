@@ -263,13 +263,22 @@ const isGithubPages = () => {
   return window.location.hostname.includes('github.io');
 };
 
+const getBackendUrl = () => {
+  return localStorage.getItem('backend_url') || '';
+};
+
+const isDemoMode = () => {
+  return isGithubPages() && !getBackendUrl();
+};
+
 export const api = {
   async getHistory(): Promise<Company[]> {
-    if (isGithubPages()) {
+    if (isDemoMode()) {
       return MOCK_COMPANIES;
     }
     try {
-      const res = await fetch('/api/companies/history');
+      const base = getBackendUrl();
+      const res = await fetch(`${base}/api/companies/history`);
       if (!res.ok) throw new Error('API down');
       return await res.json();
     } catch {
@@ -279,13 +288,14 @@ export const api = {
   },
 
   async getCompanyDetails(id: string): Promise<CompanyDetails> {
-    if (isGithubPages() || id.startsWith("mock-uuid")) {
+    if (isDemoMode() || id.startsWith("mock-uuid")) {
       if (id === "mock-uuid-stripe") return MOCK_STRIPE_DETAILS;
       if (id === "mock-uuid-amazon") return MOCK_AMAZON_DETAILS;
       return MOCK_MICROSOFT_DETAILS;
     }
     try {
-      const res = await fetch(`/api/companies/${id}`);
+      const base = getBackendUrl();
+      const res = await fetch(`${base}/api/companies/${id}`);
       if (!res.ok) throw new Error('API down');
       return await res.json();
     } catch {
@@ -302,18 +312,23 @@ export const api = {
     onError: (err: any) => void,
     onClose: () => void
   ): WebSocket {
-    // If running on GitHub Pages (static demo mode), simulate pipeline WS messages
-    if (isGithubPages()) {
+    if (isDemoMode()) {
       console.log("[api-service] Simulating pipeline WebSocket for GitHub Pages...");
       simulatePipeline(query, onMessage);
-      // Return a dummy websocket-like object so the app doesn't crash calling close()
       return { close: () => {} } as any;
     }
 
     try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host;
-      const wsUrl = `${protocol}//${host}/api/companies/ws/pipeline/${encodeURIComponent(query)}`;
+      const base = getBackendUrl();
+      let wsUrl = '';
+      if (base) {
+        const wsBase = base.replace(/^http/, 'ws');
+        wsUrl = `${wsBase}/api/companies/ws/pipeline/${encodeURIComponent(query)}`;
+      } else {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host;
+        wsUrl = `${protocol}//${host}/api/companies/ws/pipeline/${encodeURIComponent(query)}`;
+      }
       
       const ws = new WebSocket(wsUrl);
 
@@ -327,7 +342,6 @@ export const api = {
       };
 
       ws.onerror = (err) => {
-        // Trigger fallback simulation if local backend is down
         console.warn("WebSocket connection failed. Falling back to frontend simulation.");
         simulatePipeline(query, onMessage);
       };

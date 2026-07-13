@@ -4,10 +4,16 @@ import { Settings, ShieldCheck, Database, KeyRound, Cpu } from 'lucide-react';
 export const SettingsPage: React.FC = () => {
   const [geminiKey, setGeminiKey] = useState('••••••••••••••••••••••••');
   const [tavilyKey, setTavilyKey] = useState('••••••••••••••••••••••••');
+  const [backendUrl, setBackendUrl] = useState(localStorage.getItem('backend_url') || '');
   const [saved, setSaved] = useState(false);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    if (backendUrl.trim()) {
+      localStorage.setItem('backend_url', backendUrl.trim());
+    } else {
+      localStorage.removeItem('backend_url');
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
   };
@@ -54,7 +60,18 @@ export const SettingsPage: React.FC = () => {
                 onChange={e => setTavilyKey(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 bg-slate-50/50 px-3.5 py-2 focus:border-brand-500 focus:outline-none focus:bg-white transition-all text-slate-800"
               />
-              <span className="text-[10px] text-slate-400 mt-1 block">If Tavily is omitted, research will fallback to DuckDuckGo tools.</span>
+            </div>
+
+            <div>
+              <label className="block font-medium text-slate-700 mb-1.5">Target Backend API Endpoint URL (for Hosted Demos)</label>
+              <input
+                type="text"
+                value={backendUrl}
+                onChange={e => setBackendUrl(e.target.value)}
+                placeholder="e.g. http://localhost:8000 or your Render/Railway url"
+                className="w-full rounded-lg border border-slate-200 bg-slate-50/50 px-3.5 py-2 focus:border-brand-500 focus:outline-none focus:bg-white transition-all text-slate-800"
+              />
+              <span className="text-[10px] text-slate-400 mt-1 block">Specify this URL if you are hosting the React code on GitHub Pages but want it to connect to your live Python backend server. If empty, the app defaults to static high-fidelity demo simulation.</span>
             </div>
           </div>
 
