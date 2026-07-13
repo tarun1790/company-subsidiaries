@@ -20,27 +20,54 @@ async def knowledge_graph_builder_agent(state: AgentState) -> AgentState:
     kg_nodes.append({
         "id": parent_id,
         "label": legal_name,
-        "type": "Parent",
+        "type": company_info.get("entity_classification") or "Parent",
         "country": company_info.get("hq_country") or "Global",
         "confidence": 1.0,
         "evidences": []
     })
     
-    # 2. Populate Nodes and Directed Edges
+    # Add resolved corporate group entities as nodes and edges
+    group_entities = company_info.get("metadata_fields", {}).get("corporate_group_entities") or []
+    for ge in group_entities:
+        ge_name = ge.get("legal_name")
+        ge_type = ge.get("entity_type") or "Regional Operating Entity"
+        ge_rel = ge.get("relationship") or "Operating Entity"
+        
+        ge_id = re.sub(r"[^\w]", "", ge_name.lower().strip())
+        if ge_id != parent_id:
+            kg_nodes.append({
+                "id": ge_id,
+                "label": ge_name,
+                "type": ge_type,
+                "country": company_info.get("hq_country") or "Global",
+                "confidence": 1.0,
+                "evidences": [{"source_type": "Entity Resolution Registry", "source_url": "", "extracted_text": f"Reconciled related entity: {ge_name} ({ge_type})"}]
+            })
+            
+            kg_edges.append({
+                "source": parent_id,
+                "target": ge_id,
+                "relationship": ge_rel,
+                "ownership": "100%",
+                "confidence": 1.0,
+                "evidences": [{"source_type": "Entity Resolution Registry", "source_url": "", "extracted_text": f"Corporate Group relationship: {ge_name} ({ge_type})"}]
+            })
+    
+    # 2. Populate Nodes and Directed Edges from subsidiaries list
     for sub in subs:
         sub_id = re.sub(r"[^\w]", "", sub["name"].lower().strip())
         
-        # Add entity node details
-        kg_nodes.append({
-            "id": sub_id,
-            "label": sub["name"],
-            "type": sub["relationship_type"],
-            "country": sub["country"],
-            "confidence": sub["confidence"],
-            "evidences": sub["evidences"]
-        })
+        # Check if node already added to avoid duplicate node keys
+        if not any(node["id"] == sub_id for node in kg_nodes):
+            kg_nodes.append({
+                "id": sub_id,
+                "label": sub["name"],
+                "type": sub["relationship_type"],
+                "country": sub["country"],
+                "confidence": sub["confidence"],
+                "evidences": sub["evidences"]
+            })
         
-        # Add directed ownership edge details
         kg_edges.append({
             "source": parent_id,
             "target": sub_id,

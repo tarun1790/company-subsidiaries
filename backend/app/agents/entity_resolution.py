@@ -28,18 +28,25 @@ class CandidateEntity(BaseModel):
     parent_company: Optional[str] = Field(None, description="Ultimate parent entity if specified in this source.")
     confidence_score: float = Field(description="Confidence score (0.0 to 1.0) of this candidate based on source accuracy.")
 
+class CorporateGroupEntity(BaseModel):
+    legal_name: str = Field(description="Name of the related entity within the corporate group.")
+    entity_type: str = Field(description="Classification: Canonical Company, Parent Company, Subsidiary, Domain Registrant, Brand, Regional Operating Entity.")
+    relationship: str = Field(description="Relationship to the canonical company (e.g., Parent of, Subsidiary of, Operating name of).")
+
 class ConsensusEntity(BaseModel):
     legal_name: str = Field(description="The reconciled legal corporate name.")
+    entity_classification: str = Field(description="Classification: Canonical Company, Parent Company, Subsidiary, Domain Registrant, Brand, Regional Operating Entity.")
     domain: Optional[str] = Field(None, description="Reconciled primary domain.")
     cik: Optional[str] = Field(None, description="Reconciled SEC CIK (10-digit).")
     ticker: Optional[str] = Field(None, description="Reconciled stock ticker.")
     hq_country: Optional[str] = Field(None, description="Reconciled headquarters country.")
     parent_company: Optional[str] = Field(None, description="Reconciled parent company if applicable.")
     confidence: float = Field(description="Overall consensus confidence score (0.0 to 1.0) based on source agreement.")
+    corporate_group_entities: List[CorporateGroupEntity] = Field(default=[], description="Other verified entities belonging to this corporate group resolved in the query context.")
 
 class ResolutionResult(BaseModel):
     candidates: List[CandidateEntity] = Field(description="List of candidates identified from each source.")
-    is_ambiguous: bool = Field(description="Set to True if sources disagree on key fields (different legal names, CIKs, domains) and no clear consensus can be established.")
+    is_ambiguous: bool = Field(description="Set to True if authoritative sources actively conflict on the ultimate parent entity and the conflict cannot be resolved.")
     consensus: Optional[ConsensusEntity] = Field(None, description="The final consensus entity. Must be None if is_ambiguous is True.")
     explanation: str = Field(description="Detailed reconciliation explanation of agreements, disagreements, or lack of evidence.")
 
@@ -174,17 +181,17 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     structured_llm = llm.with_structured_output(ResolutionResult)
 
     system_prompt = (
-        "You are a strict, expert corporate intelligence reconciliation manager.\n"
+        "You are an expert corporate intelligence reconciliation manager.\n"
         "Your task is to analyze raw evidence gathered from multiple independent registries and tools, "
         "reconcile candidates, and determine if consensus can be reached.\n\n"
-        "Strict Reconcilation & Validation Rules:\n"
+        "Reconcilation & Prioritization Rules:\n"
         "1. Identify the candidate entity from each source separately.\n"
-        "2. Compare the Legal Name, Domain, CIK, Ticker, HQ Country, and Parent Company of the candidates.\n"
-        "3. If these fields disagree across sources (e.g. different headquarters, different ultimate parent corporate groups), "
-        "or if there is no strong consensus, set is_ambiguous = True and consensus = null.\n"
-        "4. NEVER invent or guess names, domains, or registries. All values must strictly derive from the text evidence.\n"
-        "5. If there is insufficient evidence or the sources are unclear, set is_ambiguous = True and consensus = null.\n"
-        "6. Do not default or fall back to preset companies. Treat all inputs dynamically."
+        "2. Classify the entity types: Canonical Company, Parent Company, Subsidiary, Domain Registrant, Brand, Regional Operating Entity.\n"
+        "3. Prioritize SEC EDGAR filings, official investor relations domains, and official websites over other sources when determining the canonical legal entity.\n"
+        "4. Treat WHOIS/RDAP registrant organization names as supporting metadata only, never as the canonical parent identity.\n"
+        "5. Do NOT treat multiple legal entities belonging to the same corporate group (e.g., Alphabet Inc. and Google LLC) as resolution failures. Reconcile the canonical parent as the main consensus, and capture the other related entities in `corporate_group_entities`.\n"
+        "6. Set is_ambiguous = True only when authoritative registries (SEC, official corporate listings) disagree on the canonical parent company and the conflict cannot be resolved with evidence.\n"
+        "7. NEVER invent or guess fields; derive values strictly from the collected text evidence."
     )
 
     prompt = ChatPromptTemplate.from_messages([
@@ -292,9 +299,11 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
         "hq_country": consensus.hq_country,
         "parent_company": consensus.parent_company,
         "confidence": consensus.confidence,
+        "entity_classification": consensus.entity_classification,
         "metadata_fields": {
             "explanation": resolved.explanation,
-            "resolved_candidates": [c.dict() for c in resolved.candidates]
+            "resolved_candidates": [c.dict() for c in resolved.candidates],
+            "corporate_group_entities": [c.dict() for c in consensus.corporate_group_entities]
         }
     }
 
