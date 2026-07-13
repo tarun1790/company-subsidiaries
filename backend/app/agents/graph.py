@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, END
+from typing import List
 from app.agents.state import AgentState
 from app.agents.entity_resolution import entity_resolution_agent
 from app.agents.sec_filings import sec_filings_agent
@@ -29,26 +30,24 @@ def build_workflow():
     # Set flow sequence
     workflow.set_entry_point("entity_resolution")
     
-    def decide_flow(state: AgentState) -> str:
+    def decide_flow(state: AgentState) -> List[str]:
         comp_info = state.get("company_info", {})
         if comp_info.get("status") == "failed":
-            return "end"
-        return "continue"
+            return [END]
+        return ["sec_filings", "official_website", "public_registry", "web_research"]
 
     workflow.add_conditional_edges(
         "entity_resolution",
-        decide_flow,
-        {
-            "continue": ["sec_filings", "official_website", "public_registry", "web_research", "doc_extraction"],
-            "end": END
-        }
+        decide_flow
     )
     
-    # Fan-in all parallel collection pipelines directly to verification (Evidence Fusion Engine)
-    workflow.add_edge("sec_filings", "verification")
-    workflow.add_edge("official_website", "verification")
-    workflow.add_edge("public_registry", "verification")
-    workflow.add_edge("web_research", "verification")
+    # Fan-in parallel collection pipelines to doc_extraction (Document Intelligence Agent)
+    workflow.add_edge("sec_filings", "doc_extraction")
+    workflow.add_edge("official_website", "doc_extraction")
+    workflow.add_edge("public_registry", "doc_extraction")
+    workflow.add_edge("web_research", "doc_extraction")
+    
+    # Flow from doc_extraction to verification (Evidence Fusion Engine)
     workflow.add_edge("doc_extraction", "verification")
     
     workflow.add_edge("verification", "corporate_hierarchy")
