@@ -5,7 +5,8 @@ import { EvidenceExplorer } from '../components/EvidenceExplorer';
 import { 
   Building2, Globe, FileDown, TreeDeciduous, 
   ListOrdered, ShieldAlert, Award, ExternalLink, 
-  MapPin, CheckCircle2, ChevronRight, HelpCircle, Compass
+  MapPin, CheckCircle2, ChevronRight, HelpCircle, Compass,
+  GitBranch, Network
 } from 'lucide-react';
 
 interface ResultsProps {
@@ -14,7 +15,7 @@ interface ResultsProps {
 }
 
 export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
-  const [activeTab, setActiveTab] = useState<'tree' | 'subsidiaries' | 'brands' | 'acquisitions' | 'units' | 'parents' | 'candidates' | 'evidence' | 'downloads'>('tree');
+  const [activeTab, setActiveTab] = useState<'tree' | 'graph' | 'subsidiaries' | 'brands' | 'acquisitions' | 'units' | 'parents' | 'candidates' | 'evidence' | 'downloads'>('tree');
   const [selectedEntity, setSelectedEntity] = useState<Subsidiary | null>(null);
   
   // Search & Filters state
@@ -150,6 +151,18 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
             <TreeDeciduous className="h-4 w-4" />
             Corporate Tree
           </button>
+
+          <button
+            onClick={() => setActiveTab('graph')}
+            className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'graph'
+                ? 'border-brand-900 text-brand-950'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <Network className="h-4 w-4 text-brand-600" />
+            Knowledge Graph ({details.knowledge_graph?.edges.length || 0})
+          </button>
           
           <button
             onClick={() => setActiveTab('subsidiaries')}
@@ -264,6 +277,104 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
               subsidiaries={subsidiaries}
               onSelectEntity={setSelectedEntity}
             />
+          </div>
+        )}
+
+        {activeTab === 'graph' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-4">
+              <div>
+                <h3 className="font-bold text-slate-900">Knowledge Graph Relational Edges</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Directed edges connecting corporate entities with complete evidence matrices.</p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm divide-y divide-slate-100">
+                {details.knowledge_graph?.edges.map((edge, idx) => (
+                  <div 
+                    key={idx}
+                    onClick={() => {
+                      const matchingSub = subsidiaries.find(s => s.name.toLowerCase().trim() === edge.target.toLowerCase().trim());
+                      if (matchingSub) setSelectedEntity(matchingSub);
+                    }}
+                    className="p-4 hover:bg-slate-50 cursor-pointer transition-colors flex items-center justify-between gap-4"
+                  >
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-slate-700">
+                      <span className="rounded bg-slate-900 text-white px-2 py-0.5">{edge.source}</span>
+                      <span className="text-brand-600 font-bold text-[10px]">── [{edge.relationship} ({edge.ownership})] ──►</span>
+                      <span className="rounded bg-brand-50 border border-brand-200 text-brand-800 px-2 py-0.5">{edge.target}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        edge.confidence >= 0.8 ? 'bg-brand-50 text-brand-700 border border-brand-100' : 'bg-amber-50 text-amber-700 border border-amber-100'
+                      }`}>
+                        {(edge.confidence * 100).toFixed(0)}% Match
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                {(!details.knowledge_graph?.edges || details.knowledge_graph.edges.length === 0) && (
+                  <div className="text-center py-12 text-slate-400 font-medium">
+                    No relational edges loaded in the Knowledge Graph.
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 shadow-sm space-y-4 h-fit">
+              <h4 className="font-bold text-slate-900 border-b border-slate-200 pb-2 flex items-center gap-2 text-sm">
+                <Building2 className="h-4 w-4 text-brand-600" />
+                Knowledge Graph Inspector
+              </h4>
+              
+              {selectedEntity ? (
+                <div className="space-y-4 pt-1">
+                  <div>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">Canonical Name</span>
+                    <span className="font-bold text-xs text-slate-900 block mt-0.5">{selectedEntity.name}</span>
+                  </div>
+                  {selectedEntity.legal_name && (
+                    <div>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">Official Legal Name</span>
+                      <span className="font-medium text-xs text-slate-700 block mt-0.5">{selectedEntity.legal_name}</span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">Relationship Type & Ownership</span>
+                    <span className="font-semibold text-xs text-slate-700 block mt-0.5">{selectedEntity.relationship_type} ({selectedEntity.ownership})</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">HQ Jurisdiction</span>
+                    <span className="font-medium text-xs text-slate-700 block mt-0.5">{selectedEntity.country}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block">Confidence Score</span>
+                    <span className="font-bold text-xs text-brand-700 block mt-0.5">{(selectedEntity.confidence * 100).toFixed(0)}% Confidence Match</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Citations & References</span>
+                    <div className="space-y-2">
+                      {selectedEntity.evidences.map((ev, eIdx) => (
+                        <div key={eIdx} className="bg-white border border-slate-200 rounded-lg p-3 text-[11px] leading-relaxed shadow-sm">
+                          <span className="font-bold text-brand-700 uppercase tracking-wider block text-[9px] mb-1">{ev.source_type}</span>
+                          <p className="text-slate-600 italic">"{ev.extracted_text || 'Verified via official filing registry indexing.'}"</p>
+                          {ev.source_url && (
+                            <a 
+                              href={ev.source_url} 
+                              target="_blank" 
+                              rel="noreferrer" 
+                              className="text-brand-600 font-bold hover:underline inline-flex items-center gap-0.5 mt-1 text-[10px]"
+                            >
+                              Open Source Link <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 italic text-center py-6">Select a relational edge to inspect details.</p>
+              )}
+            </div>
           </div>
         )}
 

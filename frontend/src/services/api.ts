@@ -31,9 +31,33 @@ export interface Subsidiary {
   evidences: Evidence[];
 }
 
+export interface KnowledgeGraphNode {
+  id: string;
+  label: string;
+  type: string;
+  country: string;
+  confidence: number;
+  evidences: Evidence[];
+}
+
+export interface KnowledgeGraphEdge {
+  source: string;
+  target: string;
+  relationship: string;
+  ownership: string;
+  confidence: number;
+  evidences: Evidence[];
+}
+
+export interface KnowledgeGraph {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+}
+
 export interface CompanyDetails {
   company: Company;
   subsidiaries: Subsidiary[];
+  knowledge_graph?: KnowledgeGraph;
   reports?: {
     pdf?: string;
     excel?: string;
@@ -49,6 +73,7 @@ export interface PipelineMessage {
   company_id?: string;
   company_info?: Record<string, any>;
   subsidiaries?: Subsidiary[];
+  knowledge_graph?: KnowledgeGraph;
   reports?: {
     pdf?: string;
     excel?: string;
