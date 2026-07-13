@@ -99,9 +99,9 @@ async def verification_agent(state: AgentState) -> AgentState:
             country = "Global"
 
         # Consolidate ownership
-        ownership = "100%"
+        ownership = "Not Publicly Disclosed"
         for item in items:
-            if item.get("ownership") and item["ownership"] != "100%":
+            if item.get("ownership") and item["ownership"] not in ["Not Publicly Disclosed", "Unknown", ""]:
                 ownership = item["ownership"]
                 break
 
