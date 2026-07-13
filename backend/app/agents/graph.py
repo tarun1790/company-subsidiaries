@@ -39,15 +39,18 @@ def build_workflow():
         "entity_resolution",
         decide_flow,
         {
-            "continue": "sec_filings",
+            "continue": ["sec_filings", "official_website", "public_registry", "web_research", "doc_extraction"],
             "end": END
         }
     )
-    workflow.add_edge("sec_filings", "official_website")
-    workflow.add_edge("official_website", "public_registry")
-    workflow.add_edge("public_registry", "web_research")
-    workflow.add_edge("web_research", "doc_extraction")
+    
+    # Fan-in all parallel collection pipelines directly to verification (Evidence Fusion Engine)
+    workflow.add_edge("sec_filings", "verification")
+    workflow.add_edge("official_website", "verification")
+    workflow.add_edge("public_registry", "verification")
+    workflow.add_edge("web_research", "verification")
     workflow.add_edge("doc_extraction", "verification")
+    
     workflow.add_edge("verification", "corporate_hierarchy")
     workflow.add_edge("corporate_hierarchy", "report_agent")
     workflow.add_edge("report_agent", END)
