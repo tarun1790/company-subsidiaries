@@ -199,7 +199,7 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
                         sub.confidence >= 0.8 ? 'bg-brand-50 text-brand-700' : 'bg-amber-50 text-amber-700'
                       }`}>
-                        {sub.confidence * 100:.0f}% Match
+                        {(sub.confidence * 100).toFixed(0)}% Match
                       </span>
                     </div>
                     <h4 className="font-bold text-sm text-slate-900 mt-2 tracking-tight group-hover:text-brand-900 transition-colors">

@@ -111,7 +111,7 @@ export const CorporateTree: React.FC<CorporateTreeProps> = ({ parentName, subsid
                   <AlertCircle className="h-3 w-3 text-amber-500" />
                 )}
                 <span className={`font-semibold ${node.item.confidence >= 0.7 ? 'text-brand-600' : 'text-amber-600'}`}>
-                  {node.item.confidence * 100:.0f}%
+                  {(node.item.confidence * 100).toFixed(0)}%
                 </span>
               </div>
             </div>

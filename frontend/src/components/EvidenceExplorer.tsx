@@ -70,7 +70,7 @@ export const EvidenceExplorer: React.FC<EvidenceExplorerProps> = ({ entity, onCl
             </div>
             <div className="flex-1">
               <div className="flex justify-between items-baseline">
-                <span className="font-bold text-2xl text-slate-900">{entity.confidence * 100:.0f}%</span>
+                <span className="font-bold text-2xl text-slate-900">{(entity.confidence * 100).toFixed(0)}%</span>
                 <span className={`text-xs font-semibold ${entity.confidence >= 0.7 ? 'text-brand-600' : 'text-amber-600'}`}>
                   {entity.confidence >= 0.8 ? 'Verified Ultimate' : entity.confidence >= 0.6 ? 'High Reliability' : 'Moderate Evidence'}
                 </span>
