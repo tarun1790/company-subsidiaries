@@ -72,6 +72,12 @@ class SECEdgarClient:
         except Exception as e:
             logger.error(f"Error looking up CIK for {name_or_ticker}: {str(e)}")
             
+        # Fallback to web search for historical/delisted CIK if not found in active listings
+        historical_cik = await self.search_historical_cik(name_or_ticker)
+        if historical_cik:
+            await cache_manager.set(cache_key, historical_cik)
+            return historical_cik
+
         return None
 
     async def get_latest_filings(self, cik: str) -> List[Dict[str, Any]]:
@@ -220,5 +226,36 @@ class SECEdgarClient:
                         })
                         
         return subsidiaries
+
+    async def search_historical_cik(self, company_name: str) -> Optional[str]:
+        """Queries web search to extract potential CIK numbers for historical/delisted entities, and validates them with the SEC."""
+        logger.info(f"Searching historical CIK for: {company_name}")
+        try:
+            from langchain_community.tools import DuckDuckGoSearchRun
+            search = DuckDuckGoSearchRun()
+            query = f"{company_name} SEC CIK number"
+            raw_results = await asyncio.to_thread(search.run, query)
+            
+            import re
+            candidates = re.findall(r'\b\d{7,10}\b', raw_results)
+            candidates = list(set([c.zfill(10) for c in candidates]))
+            
+            for candidate in candidates:
+                url = f"https://data.sec.gov/submissions/CIK{candidate}.json"
+                try:
+                    response = await self.client.get(url)
+                    if response.status_code == 200:
+                        data = response.json()
+                        sec_name = data.get("name", "").lower()
+                        words = [w for w in company_name.lower().split() if len(w) > 3]
+                        if any(w in sec_name for w in words):
+                            logger.info(f"Validated historical CIK: {candidate} for company: {data.get('name')}")
+                            return candidate
+                except Exception as ve:
+                    logger.debug(f"Failed to validate CIK candidate {candidate}: {str(ve)}")
+        except Exception as e:
+            logger.error(f"Error during historical CIK search: {str(e)}")
+            
+        return None
 
 sec_client = SECEdgarClient()

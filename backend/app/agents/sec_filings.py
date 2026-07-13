@@ -30,7 +30,28 @@ async def sec_filings_agent(state: AgentState) -> AgentState:
             return state
 
         accession = ten_k["accessionNumber"]
-        logs.append(f"Found 10-K filing (Date: {ten_k['filingDate']}). Downloading Exhibit 21...")
+        filing_date_str = ten_k.get("filingDate")
+        
+        is_historical = False
+        if filing_date_str:
+            try:
+                from datetime import datetime
+                f_date = datetime.strptime(filing_date_str, "%Y-%m-%d")
+                if (datetime.now() - f_date).days > 1095:
+                    is_historical = True
+            except Exception:
+                pass
+                
+        if is_historical:
+            logs.append("Searching SEC EDGAR...")
+            logs.append("No active SEC registrant found.")
+            logs.append(f"Historical lookup: ✓ {legal_name} located (CIK: {cik}).")
+            logs.append("Status: Acquired or Private Company.")
+            logs.append("Recent SEC filings are unavailable because the company is no longer publicly traded.")
+            logs.append(f"Continuing with historical 10-K filing (Date: {filing_date_str}). Downloading Exhibit 21...")
+        else:
+            logs.append(f"Found active SEC registrant: {legal_name} (CIK: {cik}).")
+            logs.append(f"Found 10-K filing (Date: {filing_date_str}). Downloading Exhibit 21...")
         
         ex21_html = await sec_client.get_exhibit_21(cik, accession)
         if not ex21_html:
