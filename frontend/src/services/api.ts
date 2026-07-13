@@ -57,8 +57,14 @@ export interface PipelineMessage {
   };
 }
 
+const isGithubPages = () => {
+  return window.location.hostname.includes('github.io');
+};
+
 const getBackendUrl = () => {
-  return localStorage.getItem('backend_url') || 'http://localhost:8000';
+  const saved = localStorage.getItem('backend_url');
+  if (saved) return saved;
+  return isGithubPages() ? 'http://localhost:8000' : '';
 };
 
 export const api = {
