@@ -1,0 +1,17 @@
+{
+  "name": "Corporate Subsidiary Intel",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {},
+  "forwardPorts": [5173, 8000],
+  "portsAttributes": {
+    "5173": {
+      "label": "Frontend App",
+      "onPortOpen": "openBrowser"
+    },
+    "8000": {
+      "label": "FastAPI Backend",
+      "onPortOpen": "ignore"
+    }
+  },
+  "postCreateCommand": "pip install -r backend/requirements.txt && playwright install chromium && cd frontend && npm install"
+}
