@@ -14,7 +14,7 @@ interface ResultsProps {
 }
 
 export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
-  const [activeTab, setActiveTab] = useState<'tree' | 'subsidiaries' | 'brands' | 'acquisitions' | 'units' | 'parents' | 'evidence' | 'downloads'>('tree');
+  const [activeTab, setActiveTab] = useState<'tree' | 'subsidiaries' | 'brands' | 'acquisitions' | 'units' | 'parents' | 'candidates' | 'evidence' | 'downloads'>('tree');
   const [selectedEntity, setSelectedEntity] = useState<Subsidiary | null>(null);
   
   // Search & Filters state
@@ -30,8 +30,17 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
     const acqs: Subsidiary[] = [];
     const units: Subsidiary[] = [];
     const parents: Subsidiary[] = [];
+    const candidates: Subsidiary[] = [];
 
     subsidiaries.forEach(sub => {
+      // Exclude candidates/unverified from main categories
+      if (sub.confidence < 0.80) {
+        if (sub.confidence >= 0.50) {
+          candidates.push(sub);
+        }
+        return;
+      }
+
       const rel = (sub.relationship_type || '').toLowerCase().trim();
       if (rel === 'brand') {
         brands.push(sub);
@@ -46,7 +55,7 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
       }
     });
 
-    return { subs, brands, acqs, units, parents };
+    return { subs, brands, acqs, units, parents, candidates };
   }, [subsidiaries]);
 
   // Determine active dataset based on selected tab
@@ -56,6 +65,7 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
     if (activeTab === 'acquisitions') return categorizedEntities.acqs;
     if (activeTab === 'units') return categorizedEntities.units;
     if (activeTab === 'parents') return categorizedEntities.parents;
+    if (activeTab === 'candidates') return categorizedEntities.candidates;
     return [];
   }, [activeTab, categorizedEntities]);
 
@@ -200,6 +210,18 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
             <Building2 className="h-4 w-4" />
             Parent Companies ({categorizedEntities.parents.length})
           </button>
+
+          <button
+            onClick={() => setActiveTab('candidates')}
+            className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'candidates'
+                ? 'border-brand-900 text-brand-950'
+                : 'border-transparent text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <HelpCircle className="h-4 w-4 text-amber-500" />
+            Candidate Discoveries ({categorizedEntities.candidates.length})
+          </button>
           
           <button
             onClick={() => setActiveTab('evidence')}
@@ -245,7 +267,7 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
           </div>
         )}
 
-        {['subsidiaries', 'brands', 'acquisitions', 'units', 'parents'].includes(activeTab) && (
+        {['subsidiaries', 'brands', 'acquisitions', 'units', 'parents', 'candidates'].includes(activeTab) && (
           <div className="space-y-6">
             {/* Filters panel */}
             <div className="flex flex-col sm:flex-row gap-4 bg-white border border-slate-100 rounded-xl p-4 shadow-sm">
