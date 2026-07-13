@@ -1,5 +1,6 @@
 import uuid
 import os
+import re
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -54,10 +55,50 @@ async def get_company_details(company_id: uuid.UUID, db: AsyncSession = Depends(
         report_result = await db.execute(select(Report).where(Report.company_id == company_id))
         report = report_result.scalar_one_or_none()
 
+        # Format knowledge graph
+        kg_nodes = []
+        kg_edges = []
+        
+        parent_id = re.sub(r"[^\w]", "", company.legal_name.lower().strip())
+        kg_nodes.append({
+            "id": parent_id,
+            "label": company.legal_name,
+            "type": "Parent",
+            "country": company.hq_country or "Global",
+            "confidence": 1.0,
+            "evidences": []
+        })
+        
+        for sub in subsidiaries:
+            sub_id = re.sub(r"[^\w]", "", sub.name.lower().strip())
+            kg_nodes.append({
+                "id": sub_id,
+                "label": sub.name,
+                "type": sub.relationship_type,
+                "country": sub.country,
+                "confidence": sub.confidence,
+                "evidences": [{"source_type": ev.source_type, "source_url": ev.source_url, "extracted_text": ev.extracted_text} for ev in sub.evidences]
+            })
+            
+            kg_edges.append({
+                "source": parent_id,
+                "target": sub_id,
+                "relationship": sub.relationship_type,
+                "ownership": sub.ownership,
+                "confidence": sub.confidence,
+                "evidences": [{"source_type": ev.source_type, "source_url": ev.source_url, "extracted_text": ev.extracted_text} for ev in sub.evidences]
+            })
+            
+        knowledge_graph = {
+            "nodes": kg_nodes,
+            "edges": kg_edges
+        }
+
         # Format output payload
         return {
             "company": company,
             "subsidiaries": subsidiaries,
+            "knowledge_graph": knowledge_graph,
             "reports": {
                 "pdf": f"/api/reports/download/{report.pdf_path}" if report and report.pdf_path else None,
                 "excel": f"/api/reports/download/{report.excel_path}" if report and report.excel_path else None,
@@ -90,60 +131,103 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
             # Ensure timezone-naive comparison
             naive_created_at = cached_company.created_at.replace(tzinfo=None)
             if datetime.utcnow() - naive_created_at < timedelta(hours=24):
-                await websocket.send_json({
-                    "stage": "cached_resolve",
-                    "log": "Recent audit results found in cache. Resolving records...",
-                    "status": "in_progress"
-                })
-                # Load reports
-                rep_stmt = select(Report).where(Report.company_id == cached_company.id)
-                rep_res = await db.execute(rep_stmt)
-                report = rep_res.scalar_one_or_none()
-                
-                # Fetch subsidiaries
+                # Fetch subsidiaries first to check if cache is empty/failed
                 sub_stmt = select(Subsidiary).where(Subsidiary.company_id == cached_company.id).options(selectinload(Subsidiary.evidences))
                 sub_res = await db.execute(sub_stmt)
                 subs = sub_res.scalars().all()
                 
-                # Serialize and return results
-                serialized_subs = []
-                for s in subs:
-                    serialized_subs.append({
-                        "name": s.name,
-                        "legal_name": s.legal_name,
-                        "country": s.country,
-                        "ownership": s.ownership,
-                        "parent": s.parent,
-                        "relationship_type": s.relationship_type,
-                        "registration_number": s.registration_number,
-                        "confidence": s.confidence,
-                        "notes": s.notes,
-                        "evidences": [{"source_type": ev.source_type, "source_url": ev.source_url, "extracted_text": ev.extracted_text} for ev in s.evidences]
+                if len(subs) > 0:
+                    await websocket.send_json({
+                        "stage": "cached_resolve",
+                        "log": "Recent audit results found in cache. Resolving records...",
+                        "status": "in_progress"
                     })
-                
-                await websocket.send_json({
-                    "stage": "done",
-                    "log": "Results loaded from local data storage.",
-                    "status": "complete",
-                    "company_id": str(cached_company.id),
-                    "company_info": {
-                        "legal_name": cached_company.legal_name,
-                        "domain": cached_company.domain,
-                        "cik": cached_company.cik,
-                        "ticker": cached_company.ticker,
-                        "hq_country": cached_company.hq_country,
-                        "metadata_fields": cached_company.metadata_fields
-                    },
-                    "subsidiaries": serialized_subs,
-                    "reports": {
-                        "pdf": f"/api/reports/download/{report.pdf_path}" if report and report.pdf_path else None,
-                        "excel": f"/api/reports/download/{report.excel_path}" if report and report.excel_path else None,
-                        "csv": f"/api/reports/download/{report.csv_path}" if report and report.csv_path else None,
-                        "json": f"/api/reports/download/{report.json_path}" if report and report.json_path else None,
-                    } if report else None
-                })
-                await websocket.close()
-                return
+                    # Load reports
+                    rep_stmt = select(Report).where(Report.company_id == cached_company.id)
+                    rep_res = await db.execute(rep_stmt)
+                    report = rep_res.scalar_one_or_none()
+                    
+                    # Serialize and return results
+                    serialized_subs = []
+                    for s in subs:
+                        serialized_subs.append({
+                            "name": s.name,
+                            "legal_name": s.legal_name,
+                            "country": s.country,
+                            "ownership": s.ownership,
+                            "parent": s.parent,
+                            "relationship_type": s.relationship_type,
+                            "registration_number": s.registration_number,
+                            "confidence": s.confidence,
+                            "notes": s.notes,
+                            "evidences": [{"source_type": ev.source_type, "source_url": ev.source_url, "extracted_text": ev.extracted_text} for ev in s.evidences]
+                        })
+                    
+                    # Format knowledge graph from cache
+                    kg_nodes = []
+                    kg_edges = []
+                    parent_name = cached_company.legal_name or query
+                    parent_id = re.sub(r"[^\w]", "", parent_name.lower().strip())
+                    kg_nodes.append({
+                        "id": parent_id,
+                        "label": parent_name,
+                        "type": "Parent",
+                        "country": cached_company.hq_country or "Global",
+                        "confidence": 1.0,
+                        "evidences": []
+                    })
+                    for s in serialized_subs:
+                        sub_id = re.sub(r"[^\w]", "", s["name"].lower().strip())
+                        kg_nodes.append({
+                            "id": sub_id,
+                            "label": s["name"],
+                            "type": s["relationship_type"],
+                            "country": s["country"],
+                            "confidence": s["confidence"],
+                            "evidences": s["evidences"]
+                        })
+                        kg_edges.append({
+                            "source": parent_id,
+                            "target": sub_id,
+                            "relationship": s["relationship_type"],
+                            "ownership": s["ownership"],
+                            "confidence": s["confidence"],
+                            "evidences": s["evidences"]
+                        })
+                    cached_kg = {
+                        "nodes": kg_nodes,
+                        "edges": kg_edges
+                    }
+
+                    await websocket.send_json({
+                        "stage": "done",
+                        "log": "Results loaded from local data storage.",
+                        "status": "complete",
+                        "company_id": str(cached_company.id),
+                        "company_info": {
+                            "legal_name": cached_company.legal_name,
+                            "domain": cached_company.domain,
+                            "cik": cached_company.cik,
+                            "ticker": cached_company.ticker,
+                            "hq_country": cached_company.hq_country,
+                            "metadata_fields": cached_company.metadata_fields
+                        },
+                        "subsidiaries": serialized_subs,
+                        "knowledge_graph": cached_kg,
+                        "reports": {
+                            "pdf": f"/api/reports/download/{report.pdf_path}" if report and report.pdf_path else None,
+                            "excel": f"/api/reports/download/{report.excel_path}" if report and report.excel_path else None,
+                            "csv": f"/api/reports/download/{report.csv_path}" if report and report.csv_path else None,
+                            "json": f"/api/reports/download/{report.json_path}" if report and report.json_path else None,
+                        } if report else None
+                    })
+                    await websocket.close()
+                    return
+                else:
+                    # Delete empty cached company to run fresh clean audit
+                    await db.delete(cached_company)
+                    await db.commit()
+                    logger.info(f"Deleted empty cached company record for '{query}' to run fresh audit.")
     except Exception as e:
         logger.error(f"Error checking cache: {str(e)}")
 
@@ -226,7 +310,7 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
         db.add(db_report)
         
         await db.commit()
-        logger.info(f"Saved corporate intelligence audit data for '{legal_name}' (ID: {db_company.id})")
+        logger.info(f"Saved corporate intelligence audit data for '{db_company.legal_name}' (ID: {db_company.id})")
 
         # 3. Stream final done payload
         await websocket.send_json({
@@ -236,6 +320,7 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
             "company_id": str(db_company.id),
             "company_info": comp_info,
             "subsidiaries": final_state["subsidiaries"],
+            "knowledge_graph": final_state.get("knowledge_graph"),
             "reports": {
                 "pdf": f"/api/reports/download/{db_report.pdf_path}" if db_report.pdf_path else None,
                 "excel": f"/api/reports/download/{db_report.excel_path}" if db_report.excel_path else None,
