@@ -277,9 +277,9 @@ export const CorporateTree: React.FC<CorporateTreeProps> = ({ parentName, subsid
     return (
       <div className="w-full flex flex-col items-center justify-center bg-white border border-slate-200 border-dashed rounded-2xl p-12 text-center text-slate-400 font-medium min-h-[300px]">
         <AlertCircle className="h-8 w-8 text-slate-300 mb-2 animate-bounce" />
-        <span className="font-bold text-slate-700">No verified subsidiaries could be identified from trusted sources.</span>
+        <span className="font-bold text-slate-700">No subsidiaries could be identified from any public sources.</span>
         <span className="text-xs text-slate-500 mt-1.5 max-w-md leading-relaxed">
-          All crawled sources were analyzed, but no relationships met the strict verification confidence threshold (80%+).
+          The structural discovery pipeline ran completely but found no candidates or entity relationships.
         </span>
       </div>
     );
