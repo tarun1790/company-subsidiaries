@@ -1,4 +1,5 @@
 import httpx
+import asyncio
 import json
 import re
 import os
@@ -189,22 +190,31 @@ class SECEdgarClient:
                     if any(h in name_lower for h in ["name of", "subsidiary", "jurisdiction", "state of", "country", "incorporation", "percent owned"]):
                         continue
                     
-                    jurisdiction = cols[-1]
-                    
-                    # Extract ownership percentage if available, otherwise default to Not Publicly Disclosed
+                    # Robust right-to-left scan to isolate jurisdiction and percentage
+                    jurisdiction = "Unknown"
                     percent = "Not Publicly Disclosed"
-                    if len(cols) > 2:
-                        for cell in cols[1:-1]:
-                            match = re.search(r'\b\d{1,3}(?:\.\d+)?\s*%\b', cell)
-                            if match:
-                                percent = match.group(0).strip()
-                                break
                     
+                    if len(cols) >= 2:
+                        candidates = cols[1:]
+                        for c in reversed(candidates):
+                            c_clean = c.strip()
+                            if not c_clean:
+                                continue
+                            # If cell is percent symbol, numeric value or matches typical percentage pattern
+                            if re.search(r'%\s*$', c_clean) or c_clean.isdigit() or re.match(r'^\d{1,3}(?:\.\d+)?$', c_clean):
+                                if percent == "Not Publicly Disclosed":
+                                    percent = c_clean
+                                else:
+                                    percent = f"{c_clean} {percent}"
+                            else:
+                                jurisdiction = c_clean
+                                break
+                                
                     # Clean name (remove extra spaces, characters)
                     clean_name = re.sub(r'\s+', ' ', name).strip()
                     clean_juri = re.sub(r'\s+', ' ', jurisdiction).strip()
                     
-                    if len(clean_name) > 3 and len(clean_juri) > 2:
+                    if len(clean_name) > 3 and len(clean_juri) > 2 and clean_juri.lower() not in ["unknown"]:
                         subsidiaries.append({
                             "name": clean_name,
                             "country": clean_juri,
@@ -239,6 +249,11 @@ class SECEdgarClient:
 
     async def search_historical_cik(self, company_name: str) -> Optional[str]:
         """Queries web search to extract potential CIK numbers for historical/delisted entities, and validates them with the SEC."""
+        cache_key = f"hist_cik:{company_name.lower().strip()}"
+        cached = await cache_manager.get(cache_key)
+        if cached:
+            return cached if cached != "NONE" else None
+
         logger.info(f"Searching historical CIK for: {company_name}")
         try:
             from langchain_community.tools import DuckDuckGoSearchRun
@@ -260,12 +275,14 @@ class SECEdgarClient:
                         words = [w for w in company_name.lower().split() if len(w) > 3]
                         if any(w in sec_name for w in words):
                             logger.info(f"Validated historical CIK: {candidate} for company: {data.get('name')}")
+                            await cache_manager.set(cache_key, candidate, expire=86400)
                             return candidate
                 except Exception as ve:
                     logger.debug(f"Failed to validate CIK candidate {candidate}: {str(ve)}")
         except Exception as e:
             logger.error(f"Error during historical CIK search: {str(e)}")
             
+        await cache_manager.set(cache_key, "NONE", expire=86400)
         return None
 
 sec_client = SECEdgarClient()

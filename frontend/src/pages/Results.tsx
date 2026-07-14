@@ -176,56 +176,7 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
         </div>
       )}
 
-      {company.metadata_fields?.evaluation_metrics && (
-        <div className="bg-slate-900 border border-slate-800 text-white rounded-xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-white tracking-wide uppercase">Ground Truth Evaluation Metrics</h3>
-              <p className="text-[11px] text-slate-400 mt-0.5">Discovered structure validated against verified ground-truth benchmark dataset.</p>
-            </div>
-            <span className="text-[10px] font-bold uppercase bg-brand-500 text-white px-2 py-0.5 rounded animate-pulse">Evaluation Mode Active</span>
-          </div>
-          
-          <div className="grid grid-cols-3 gap-4 border-t border-b border-slate-800 py-3 text-center">
-            <div>
-              <span className="text-[9px] text-slate-400 block uppercase font-semibold">Precision</span>
-              <span className="text-lg font-bold text-brand-400 block mt-0.5">{company.metadata_fields.evaluation_metrics.precision}%</span>
-            </div>
-            <div>
-              <span className="text-[9px] text-slate-400 block uppercase font-semibold">Recall</span>
-              <span className="text-lg font-bold text-amber-400 block mt-0.5">{company.metadata_fields.evaluation_metrics.recall}%</span>
-            </div>
-            <div>
-              <span className="text-[9px] text-slate-400 block uppercase font-semibold">F1 Score</span>
-              <span className="text-lg font-bold text-emerald-400 block mt-0.5">{company.metadata_fields.evaluation_metrics.f1_score}%</span>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            {company.metadata_fields.evaluation_metrics.missed_entities?.length > 0 && (
-              <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
-                <span className="font-bold text-amber-400 uppercase tracking-wider text-[9px] block">Missed Entities (False Negatives - {company.metadata_fields.evaluation_metrics.false_negatives_count})</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {company.metadata_fields.evaluation_metrics.missed_entities.map((m: string) => (
-                    <span key={m} className="rounded bg-slate-900 border border-slate-800 text-slate-300 px-2 py-0.5 text-[10px]">{m}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {company.metadata_fields.evaluation_metrics.false_positive_entities?.length > 0 && (
-              <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
-                <span className="font-bold text-brand-400 uppercase tracking-wider text-[9px] block">Unmatched Discovered Entities (False Positives - {company.metadata_fields.evaluation_metrics.false_positives_count})</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {company.metadata_fields.evaluation_metrics.false_positive_entities.map((m: string) => (
-                    <span key={m} className="rounded bg-slate-900 border border-slate-800 text-slate-300 px-2 py-0.5 text-[10px]">{m}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+
 
       {/* Tabs list */}
       <div className="border-b border-slate-200/80">

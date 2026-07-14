@@ -23,3 +23,12 @@ class AgentState(TypedDict):
     csv_path: Optional[str]
     json_path: Optional[str]
     errors: Annotated[List[str], operator.add]
+    
+    # NEW state fields
+    current_iteration: int
+    explored_entities: List[str]
+    pending_targets: List[Dict[str, Any]]
+    coverage_score: Dict[str, Any]
+    evidence_cache: Dict[str, Any]
+    source_statistics: Dict[str, Any]
+    execution_summary: Dict[str, Any]

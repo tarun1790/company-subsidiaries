@@ -1,0 +1,30 @@
+{
+  "max_iterations": 5,
+  "max_depth": 3,
+  "no_new_entities_streak_threshold": 3,
+  "coverage_threshold": 0.95,
+  "timeouts": {
+    "entity_resolution": 30.0,
+    "collectors": 20.0,
+    "structured_extraction": 30.0,
+    "default": 30.0
+  },
+  "source_priorities": {
+    "SEC Filings": 1.0,
+    "Authoritative Registry": 0.95,
+    "Annual Reports": 0.9,
+    "Official Website": 0.85,
+    "Press Releases": 0.8,
+    "Web Research": 0.6,
+    "Wikipedia": 0.2
+  },
+  "confidence_weights": {
+    "footer": 40,
+    "registry": 30,
+    "whois": 10,
+    "dns": 5,
+    "ssl": 5,
+    "search": 5,
+    "consensus": 5
+  }
+}

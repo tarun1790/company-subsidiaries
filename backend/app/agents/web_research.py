@@ -35,13 +35,35 @@ async def web_research_agent(state: AgentState) -> AgentState:
     discovered = []
     search_context = ""
     
-    # 1. Search Wikipedia (LangChain Community Tool)
+    original_query = state["company_info"].get("original_query") or state["query"]
+    
+    # 1. Search Wikipedia (LangChain Community Tool with caching)
     try:
+        import asyncio
+        from app.core.redis_cache import cache_manager
+        
+        async def run_wikipedia_cached(q: str, tool) -> str:
+            cache_key = f"wiki:{q}"
+            cached = await cache_manager.get(cache_key)
+            if cached:
+                return cached
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, tool.run, q)
+            if res:
+                await cache_manager.set(cache_key, res, expire=86400)
+            return res
+
         logs.append("Invoking LangChain Tool: langchain_community.tools.WikipediaQueryRun...")
         wiki = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
-        wiki_res = wiki.run(f"{legal_name} corporate subsidiaries acquisitions history")
+        
+        wiki_res = await run_wikipedia_cached(f"{legal_name} corporate subsidiaries acquisitions history", wiki)
         if wiki_res and "No good Wikipedia page found" not in wiki_res:
-            search_context += f"--- WIKIPEDIA ENTRY ---\n{wiki_res}\n\n"
+            search_context += f"--- WIKIPEDIA ENTRY ({legal_name}) ---\n{wiki_res}\n\n"
+            
+        if original_query.lower().strip() != legal_name.lower().strip():
+            wiki_res_orig = await run_wikipedia_cached(f"{original_query} corporate subsidiaries brands acquisitions history", wiki)
+            if wiki_res_orig and "No good Wikipedia page found" not in wiki_res_orig:
+                search_context += f"--- WIKIPEDIA ENTRY ({original_query}) ---\n{wiki_res_orig}\n\n"
     except Exception as e:
         logger.warning(f"Wikipedia search error: {str(e)}")
 
@@ -56,17 +78,34 @@ async def web_research_agent(state: AgentState) -> AgentState:
         except Exception as e:
             logger.warning(f"Cert transparency lookup error: {str(e)}")
 
-    # 3. DuckDuckGo Search (LangChain Community Tools)
+    # 3. DuckDuckGo Search (LangChain Community Tools with caching)
     try:
+        from app.core.redis_cache import cache_manager
+        
+        async def run_ddg_cached(q: str, tool) -> str:
+            cache_key = f"ddg:{q}"
+            cached = await cache_manager.get(cache_key)
+            if cached:
+                return cached
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, tool.run, q)
+            if res:
+                await cache_manager.set(cache_key, res, expire=86400)
+            return res
+
         logs.append("Invoking LangChain Tool: langchain_community.tools.DuckDuckGoSearchRun...")
         ddg = DuckDuckGoSearchRun()
-        ddg_res = ddg.run(f"{legal_name} list of subsidiaries divisions brands joint ventures")
-        search_context += f"--- WEB SEARCH RESULTS ---\n{ddg_res}\n\n"
+        ddg_res = await run_ddg_cached(f"{legal_name} list of subsidiaries divisions brands joint ventures", ddg)
+        search_context += f"--- WEB SEARCH RESULTS ({legal_name}) ---\n{ddg_res}\n\n"
         
+        if original_query.lower().strip() != legal_name.lower().strip():
+            ddg_res_orig = await run_ddg_cached(f"{original_query} list of subsidiaries divisions brands joint ventures products", ddg)
+            search_context += f"--- WEB SEARCH RESULTS ({original_query}) ---\n{ddg_res_orig}\n\n"
+            
         logs.append("Invoking LangChain Tool: langchain_community.tools.DuckDuckGoSearchResults...")
         ddg_results = DuckDuckGoSearchResults()
-        ddg_links_res = ddg_results.run(f"{legal_name} corporate structure")
-        search_context += f"--- WEB LINK SCHEMAS ---\n{ddg_links_res}\n\n"
+        ddg_links_res = await run_ddg_cached(f"{legal_name} corporate structure", ddg_results)
+        search_context += f"--- WEB LINK SCHEMAS ({legal_name}) ---\n{ddg_links_res}\n\n"
     except Exception as e:
         logger.warning(f"DDG search error: {str(e)}")
 

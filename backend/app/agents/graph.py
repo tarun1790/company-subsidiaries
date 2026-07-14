@@ -1,5 +1,9 @@
 from langgraph.graph import StateGraph, END
-from typing import List
+from langgraph.checkpoint.memory import MemorySaver
+from typing import List, Dict, Any
+import time
+import asyncio
+import uuid
 from app.agents.state import AgentState
 from app.agents.entity_resolution import entity_resolution_agent
 from app.agents.sec_filings import sec_filings_agent
@@ -18,35 +22,84 @@ from app.agents.confidence_scoring import confidence_scoring_agent
 from app.agents.knowledge_graph_builder import knowledge_graph_builder_agent
 from app.agents.corporate_hierarchy import corporate_hierarchy_agent
 from app.agents.report_agent import report_agent
-from app.agents.evaluation_benchmark import evaluation_benchmark_agent
+from app.agents.loop_coordinator import loop_coordinator_agent, next_target_preparer_agent, route_discovery_loop
+from app.agents.discovery_intelligence import coverage_estimator_agent, discovery_strategy_engine_agent, relationship_classification_agent, entity_verification_agent
 from app.core.logging import logger
+
+def resilient_agent_node(node_name: str, timeout: float = 30.0):
+    """Decorator to enforce individual timeouts, handle errors gracefully, and log step latency."""
+    def decorator(func):
+        from functools import wraps
+        @wraps(func)
+        async def wrapper(state: AgentState) -> AgentState:
+            logger.info(f"Initiating node '{node_name}'...")
+            start_time = time.time()
+            try:
+                # Execute node with timeout
+                res = await asyncio.wait_for(func(state), timeout=timeout)
+                duration = time.time() - start_time
+                duration_msg = f"[Node Completed] Node '{node_name}' finished in {duration:.2f} seconds."
+                logger.info(duration_msg)
+                
+                # Make sure result is a dict
+                if not isinstance(res, dict):
+                    res = {}
+                
+                # Append log message
+                if "logs" not in res:
+                    res["logs"] = []
+                res["logs"].append(duration_msg)
+                return res
+            except asyncio.TimeoutError:
+                duration = time.time() - start_time
+                timeout_msg = f"[Node Timeout] Node '{node_name}' timed out after {timeout}s (total: {duration:.2f}s). Continuing with partial results."
+                logger.warning(timeout_msg)
+                return {
+                    "logs": [timeout_msg],
+                    "errors": [f"Node '{node_name}' timed out."]
+                }
+            except Exception as e:
+                duration = time.time() - start_time
+                error_msg = f"[Node Error] Node '{node_name}' failed after {duration:.2f}s: {str(e)}"
+                logger.error(error_msg)
+                return {
+                    "logs": [error_msg],
+                    "errors": [error_msg]
+                }
+        return wrapper
+    return decorator
 
 def build_workflow():
     # Initialize StateGraph with our state schema
     workflow = StateGraph(AgentState)
 
-    # Add all agent nodes
-    workflow.add_node("entity_resolution", entity_resolution_agent)
-    workflow.add_node("sec_filings", sec_filings_agent)
-    workflow.add_node("official_website", official_website_agent)
-    workflow.add_node("public_registry", public_registry_agent)
-    workflow.add_node("web_research", web_research_agent)
-    workflow.add_node("domain_intelligence", domain_intelligence_agent)
+    # Add all agent nodes with timeouts
+    workflow.add_node("entity_resolution", resilient_agent_node("entity_resolution", timeout=60.0)(entity_resolution_agent))
+    workflow.add_node("sec_filings", resilient_agent_node("sec_filings", timeout=20.0)(sec_filings_agent))
+    workflow.add_node("official_website", resilient_agent_node("official_website", timeout=30.0)(official_website_agent))
+    workflow.add_node("public_registry", resilient_agent_node("public_registry", timeout=20.0)(public_registry_agent))
+    workflow.add_node("web_research", resilient_agent_node("web_research", timeout=20.0)(web_research_agent))
+    workflow.add_node("domain_intelligence", resilient_agent_node("domain_intelligence", timeout=15.0)(domain_intelligence_agent))
     
     # Split document pipeline nodes
-    workflow.add_node("document_discovery", document_discovery_agent)
-    workflow.add_node("document_intelligence", document_intelligence_agent)
-    workflow.add_node("structured_entity_extraction", structured_entity_extraction_agent)
+    workflow.add_node("document_discovery", resilient_agent_node("document_discovery", timeout=20.0)(document_discovery_agent))
+    workflow.add_node("document_intelligence", resilient_agent_node("document_intelligence", timeout=30.0)(document_intelligence_agent))
+    workflow.add_node("structured_entity_extraction", resilient_agent_node("structured_entity_extraction", timeout=20.0)(structured_entity_extraction_agent))
     
-    workflow.add_node("evidence_fusion", evidence_fusion_agent)
-    workflow.add_node("entity_normalization", entity_normalization_agent)
-    workflow.add_node("conflict_resolution", conflict_resolution_agent)
-    workflow.add_node("relationship_verification", relationship_verification_agent)
-    workflow.add_node("confidence_scoring", confidence_scoring_agent)
-    workflow.add_node("knowledge_graph_builder", knowledge_graph_builder_agent)
-    workflow.add_node("corporate_hierarchy", corporate_hierarchy_agent)
-    workflow.add_node("report_agent", report_agent)
-    workflow.add_node("evaluation_benchmark", evaluation_benchmark_agent)
+    workflow.add_node("evidence_fusion", resilient_agent_node("evidence_fusion", timeout=20.0)(evidence_fusion_agent))
+    workflow.add_node("entity_normalization", resilient_agent_node("entity_normalization", timeout=30.0)(entity_normalization_agent))
+    workflow.add_node("relationship_classification", resilient_agent_node("relationship_classification", timeout=20.0)(relationship_classification_agent))
+    workflow.add_node("entity_verification", resilient_agent_node("entity_verification", timeout=20.0)(entity_verification_agent))
+    workflow.add_node("conflict_resolution", resilient_agent_node("conflict_resolution", timeout=30.0)(conflict_resolution_agent))
+    workflow.add_node("relationship_verification", resilient_agent_node("relationship_verification", timeout=30.0)(relationship_verification_agent))
+    workflow.add_node("confidence_scoring", resilient_agent_node("confidence_scoring", timeout=20.0)(confidence_scoring_agent))
+    workflow.add_node("knowledge_graph_builder", resilient_agent_node("knowledge_graph_builder", timeout=20.0)(knowledge_graph_builder_agent))
+    workflow.add_node("corporate_hierarchy", resilient_agent_node("corporate_hierarchy", timeout=30.0)(corporate_hierarchy_agent))
+    workflow.add_node("report_agent", resilient_agent_node("report_agent", timeout=20.0)(report_agent))
+    workflow.add_node("coverage_estimator", resilient_agent_node("coverage_estimator", timeout=20.0)(coverage_estimator_agent))
+    workflow.add_node("discovery_strategy_engine", resilient_agent_node("discovery_strategy_engine", timeout=20.0)(discovery_strategy_engine_agent))
+    workflow.add_node("loop_coordinator", resilient_agent_node("loop_coordinator", timeout=20.0)(loop_coordinator_agent))
+    workflow.add_node("next_target_preparer", resilient_agent_node("next_target_preparer", timeout=15.0)(next_target_preparer_agent))
 
     # Set flow sequence
     workflow.set_entry_point("entity_resolution")
@@ -76,22 +129,32 @@ def build_workflow():
     # Sequential Consolidation Pipeline flow
     workflow.add_edge("structured_entity_extraction", "evidence_fusion")
     workflow.add_edge("evidence_fusion", "entity_normalization")
-    workflow.add_edge("entity_normalization", "conflict_resolution")
+    workflow.add_edge("entity_normalization", "relationship_classification")
+    workflow.add_edge("relationship_classification", "entity_verification")
+    workflow.add_edge("entity_verification", "conflict_resolution")
     workflow.add_edge("conflict_resolution", "relationship_verification")
     workflow.add_edge("relationship_verification", "confidence_scoring")
     workflow.add_edge("confidence_scoring", "knowledge_graph_builder")
     workflow.add_edge("knowledge_graph_builder", "corporate_hierarchy")
     workflow.add_edge("corporate_hierarchy", "report_agent")
-    workflow.add_edge("report_agent", "evaluation_benchmark")
-    workflow.add_edge("evaluation_benchmark", END)
+    workflow.add_edge("report_agent", "coverage_estimator")
+    workflow.add_edge("coverage_estimator", "discovery_strategy_engine")
+    workflow.add_edge("discovery_strategy_engine", "loop_coordinator")
+    
+    workflow.add_conditional_edges(
+        "loop_coordinator",
+        route_discovery_loop
+    )
+    workflow.add_edge("next_target_preparer", "sec_filings")
 
-    # Compile the graph
-    return workflow.compile()
+    # Compile the graph with MemorySaver checkpointer
+    memory = MemorySaver()
+    return workflow.compile(checkpointer=memory)
 
 # Instantiated compiled workflow
 pipeline_graph = build_workflow()
 
-async def execute_pipeline(query: str, update_hook=None) -> AgentState:
+async def execute_pipeline(query: str, update_hook=None, thread_id: str = None) -> AgentState:
     """Executes the corporate research multi-agent pipeline and triggers hooks for progress monitoring."""
     # Initial state structure
     initial_state: AgentState = {
@@ -112,15 +175,26 @@ async def execute_pipeline(query: str, update_hook=None) -> AgentState:
         "excel_path": None,
         "csv_path": None,
         "json_path": None,
-        "errors": []
+        "errors": [],
+        "current_iteration": 1,
+        "explored_entities": [query],
+        "pending_targets": [],
+        "coverage_score": {"overall": 0.0},
+        "evidence_cache": {},
+        "source_statistics": {},
+        "execution_summary": {"iterations_run": 0, "successful_strategies": [], "sources_with_data": [], "unseen_entities_count": 0}
     }
     
-    logger.info(f"Initiating corporate subsidiary intelligence pipeline for query: {query}")
+    if not thread_id:
+        thread_id = str(uuid.uuid4())
+        
+    config = {"configurable": {"thread_id": thread_id}}
+    logger.info(f"Initiating corporate subsidiary intelligence pipeline for query: {query} | Thread ID: {thread_id}")
     
     current_state = initial_state
     
     # We execute node by node so we can stream progress and logs back to API websockets or clients
-    async for event in pipeline_graph.astream(initial_state):
+    async for event in pipeline_graph.astream(initial_state, config):
         # Event is a dictionary matching node_name -> state update
         for node_name, state_update in event.items():
             logger.info(f"Node completed: {node_name}")

@@ -101,224 +101,417 @@ async def gather_crt_sh(domain: str) -> str:
 # Agent Main Logic
 # ============================================================================
 
+# ============================================================================
+# Helper domain parser and normalizer
+# ============================================================================
+
+def normalize_and_get_domain(url_or_name: str) -> Optional[str]:
+    """Clean and normalize URL or name to extract the apex/root domain."""
+    s = url_or_name.strip().lower()
+    
+    # Check if there is a dot indicating a domain/URL
+    if not re.search(r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,6}', s):
+        return None
+        
+    s = re.sub(r'^https?://', '', s)
+    s = re.sub(r'^[^/]+@', '', s)
+    s = re.sub(r':[0-9]+', '', s)
+    
+    # Strip paths, queries, fragments
+    s = s.split('/')[0].split('?')[0].split('#')[0]
+    s = re.sub(r'^www\.', '', s)
+    
+    parts = s.split('.')
+    if len(parts) >= 3:
+        double_tlds = {"co", "com", "org", "net", "gov", "edu", "ac", "or", "ne", "me"}
+        if parts[-2] in double_tlds and len(parts[-1]) == 2:
+            return ".".join(parts[-3:])
+        return ".".join(parts[-2:])
+    elif len(parts) == 2:
+        return s
+    return s
+
+def find_domain_in_text(text: str) -> Optional[str]:
+    """Helper to robustly extract a corporate domain from search result text."""
+    if not text:
+        return None
+    excludes = {
+        "wikipedia.org", "duckduckgo.com", "google.com", "brave.com", 
+        "yandex.com", "yahoo.com", "startpage.com", "grokipedia.com",
+        "w3.org", "sec.gov", "gleif.org", "opencorporates.com"
+    }
+    
+    # 1. Search for full URLs
+    urls = re.findall(r'https?://(?:www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,6})', text)
+    for u in urls:
+        u_clean = u.lower().strip()
+        if not any(ex in u_clean for ex in excludes):
+            return u_clean
+            
+    # 2. Search for any word containing dot and valid TLD
+    candidates = re.findall(r'\b([a-zA-Z0-9-]+\.[a-zA-Z]{2,6})\b', text)
+    for c in candidates:
+        c_clean = c.lower().strip()
+        if not any(ex in c_clean for ex in excludes):
+            if not re.match(r'^[0-9\.]+$', c_clean):
+                return c_clean
+                
+    return None
+
+# ============================================================================
+# Pydantic Schemas for Structured LLM Extraction & Consensus
+# ============================================================================
+
+class CandidateExtraction(BaseModel):
+    candidate_names: List[str] = Field(description="Exact legal company name candidates extracted from the website footer, copyright, or WHOIS data.")
+    has_footer_legal_entity: bool = Field(description="Set to True if a legal corporate entity name is explicitly found in the copyright or footer text.")
+    explanation: str = Field(description="Short rationale for the extracted candidate names.")
+
+class ConsensusEntityResolution(BaseModel):
+    canonical_company: str = Field(description="The reconciled canonical legal company name.")
+    official_domain: str = Field(description="The canonical domain resolved.")
+    country: str = Field(description="The country of registration or headquarters.")
+    legal_name: str = Field(description="The full legal name of the canonical entity.")
+    registration_number: Optional[str] = Field(None, description="Corporate registration number, CIK, or LEI resolved.")
+    explanation: str = Field(description="Explanation of the consensus.")
+
+class InputIntelligence(BaseModel):
+    input_type: str = Field(description="Classified input type: COMPANY_NAME, BRAND, DOMAIN, URL, LEGAL_ENTITY, TICKER, APP_NAME.")
+    normalized_name: str = Field(description="Normalized name/term.")
+    resolved_ultimate_parent: str = Field(description="The ultimate parent company legal name (e.g. Alphabet Inc. for YouTube, Meta Platforms Inc. for Instagram). If the input is already a parent company or standalone company, return its own name.")
+    official_website: str = Field(description="The official website domain of the ultimate parent company (e.g. meta.com for Instagram or YouTube). If none can be found, return the best candidate domain.")
+    explanation: str = Field(description="Brief reason/evidence linking the input to the resolved ultimate parent company.")
+
+COMMON_BRANDS_FALLBACK = {
+    "instagram": ("Meta Platforms, Inc.", "meta.com"),
+    "youtube": ("Alphabet Inc.", "google.com"),
+    "whatsapp": ("Meta Platforms, Inc.", "meta.com"),
+    "gmail": ("Alphabet Inc.", "google.com"),
+    "android": ("Alphabet Inc.", "google.com"),
+    "aws": ("Amazon.com, Inc.", "amazon.com"),
+    "kindle": ("Amazon.com, Inc.", "amazon.com"),
+    "github": ("Microsoft Corporation", "microsoft.com"),
+    "linkedin": ("Microsoft Corporation", "microsoft.com"),
+    "xbox": ("Microsoft Corporation", "microsoft.com"),
+    "beats": ("Apple Inc.", "apple.com"),
+    "meta": ("Meta Platforms, Inc.", "meta.com"),
+    "instagram.com": ("Meta Platforms, Inc.", "meta.com"),
+    "youtube.com": ("Alphabet Inc.", "google.com"),
+    "whatsapp.com": ("Meta Platforms, Inc.", "meta.com"),
+}
+
+# ============================================================================
+# Agent Main Logic
+# ============================================================================
+
 async def entity_resolution_agent(state: AgentState) -> AgentState:
     """Agent 1: Resolves user search term into a verified legal entity using multi-source consensus."""
     query = state["query"].strip()
     logs = state.get("logs", [])
-    logs.append(f"Resolving Company Entity: '{query}'...")
-    logger.info(f"Initiating entity resolution consensus for query: {query}")
+    logs.append(f"Initiating Enterprise Entity Resolution for: '{query}'...")
+    logger.info(f"Initiating Enterprise Entity Resolution consensus for query: {query}")
 
-    # Initialize tools
+    from app.services.dns_whois import resolver
+    from app.services.gleif import gleif_client
+    from app.services.open_corporates import opencorporates
+    from app.services.web_scraper import scraper
+
     search_tool = DuckDuckGoSearchRun()
 
-    # Define parallel gathering tasks
-    async def get_sec():
-        try:
-            return await sec_client.get_cik_by_name_or_ticker(query)
-        except Exception as e:
-            return f"SEC lookup failed: {str(e)}"
-
-    async def get_web_search():
-        try:
-            q = f"corporate legal entity name ticker CIK domain headquarter parent company of {query}"
-            return await asyncio.to_thread(search_tool.run, q)
-        except Exception as e:
-            return f"Web search failed: {str(e)}"
-
-    async def get_wiki_search():
-        try:
-            q = f"site:en.wikipedia.org legal name headquarters parent company of {query}"
-            return await asyncio.to_thread(search_tool.run, q)
-        except Exception as e:
-            return f"Wikipedia search failed: {str(e)}"
-
-    # Run parallel gather tasks
-    sec_task = get_sec()
-    web_task = get_web_search()
-    wiki_task = get_wiki_search()
-
-    whois_task = None
-    crt_task = None
-    if is_domain(query):
-        whois_task = gather_whois_dns(query)
-        crt_task = gather_crt_sh(query)
+    # Step 1: Universal Input Intelligence Layer
+    logs.append("Running Universal Input Intelligence Layer...")
+    
+    query_lower = query.lower().strip()
+    parent_name = None
+    parent_domain = None
+    
+    # 1.1 Programmatic brand fallback check
+    if query_lower in COMMON_BRANDS_FALLBACK:
+        parent_name, parent_domain = COMMON_BRANDS_FALLBACK[query_lower]
+        logs.append(f"Input Intelligence: Match brand/app '{query}' -> Parent: '{parent_name}' ({parent_domain})")
     else:
-        # If it's a query like Alphabet, let's extract a domain candidate first via quick search
+        # 1.2 LLM-driven input intelligence classification
+        llm = get_llm()
+        intelligence_llm = llm.with_structured_output(InputIntelligence)
+        intel_prompt = ChatPromptTemplate.from_messages([
+            ("system", (
+                "You are the Universal Input Intelligence analyst.\n"
+                "Your job is to analyze the user query (which could be a brand, product, app, subsidiary, ticker, URL, or company) "
+                "and resolve it to its ultimate parent corporate legal entity name and its official domain.\n"
+                "For example:\n"
+                "- 'Instagram' -> parent: 'Meta Platforms, Inc.', domain: 'meta.com'\n"
+                "- 'YouTube' -> parent: 'Alphabet Inc.', domain: 'google.com'\n"
+                "- 'AWS' -> parent: 'Amazon.com, Inc.', domain: 'amazon.com'\n"
+                "- 'NFLX' -> parent: 'Netflix, Inc.', domain: 'netflix.com'\n"
+                "- 'Flipkart' -> parent: 'Walmart Inc.' (or 'Flipkart Private Limited' if resolving standalone corporate structure)\n"
+                "If the query is already an independent parent company, return its own name and domain."
+            )),
+            ("user", "User Query: {query}")
+        ])
+        
         try:
-            domain_query = f"official website domain address of {query}"
-            domain_search = await asyncio.to_thread(search_tool.run, domain_query)
-            urls = re.findall(r'https?://(?:www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,6})', domain_search)
-            if urls:
-                domain_candidate = urls[0]
-                logger.info(f"Discovered candidate domain for WHOIS/DNS: {domain_candidate}")
-                whois_task = gather_whois_dns(domain_candidate)
-                crt_task = gather_crt_sh(domain_candidate)
+            intel_chain = intel_prompt | intelligence_llm
+            result = await intel_chain.ainvoke({"query": query})
+            parent_name = result.resolved_ultimate_parent
+            parent_domain = result.official_website
+            logs.append(f"Input Intelligence resolved input type '{result.input_type}' to ultimate parent: '{parent_name}' ({parent_domain})")
+        except Exception as intel_err:
+            logger.warning(f"Input Intelligence LLM failed: {str(intel_err)}")
+            # Fall back to standard search-based lookup
+            parent_name = query
+            parent_domain = normalize_and_get_domain(query)
+            if not parent_domain:
+                try:
+                    logs.append("Searching web for official corporate domain...")
+                    domain_query = f"official corporate website domain address of {query}"
+                    domain_search = await asyncio.to_thread(search_tool.run, domain_query)
+                    parent_domain = find_domain_in_text(domain_search)
+                except Exception as se:
+                    logger.debug(f"Domain search failed: {str(se)}")
+
+    domain = normalize_and_get_domain(parent_domain) if parent_domain else None
+    if parent_name and parent_name != query:
+        # Override target query with resolved parent name to search parent records downstream
+        logs.append(f"Switching resolution target from '{query}' to resolved parent '{parent_name}' ({domain or 'No Domain'})")
+        # Update state query so downstream collectors target the resolved parent
+        state["query"] = parent_name
+
+    # Step 2 & 3: Visit domain to scrape text and extract candidates
+    web_text = ""
+    title = ""
+    meta_desc = ""
+    if domain:
+        logs.append(f"Visiting official website: {domain}...")
+        # Resolve canonical URL first via fast redirect lookup
+        canonical_url = f"https://{domain}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                resp = await client.get(f"https://{domain}")
+                canonical_url = str(resp.url)
+        except Exception:
+            try:
+                async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                    resp = await client.get(f"https://www.{domain}")
+                    canonical_url = str(resp.url)
+            except Exception:
+                pass
+                
+        logs.append(f"Scraping canonical URL: {canonical_url}...")
+        try:
+            scraped = await scraper.scrape_url(canonical_url)
+            if scraped:
+                web_text = scraped
+        except Exception as scraper_err:
+            logger.debug(f"Scraper failed for {canonical_url}: {str(scraper_err)}")
+
+    # Step 4: Validate using WHOIS, DNS, SSL
+    whois_info = {}
+    dns_records = {}
+    ssl_domains = []
+    if domain:
+        logs.append("Fetching DNS, WHOIS, and Certificate Transparency records...")
+        whois_info = await resolver.get_whois_info(domain)
+        dns_records = await resolver.get_dns_records(domain)
+        ssl_domains = await resolver.get_cert_transparency_domains(domain)
+
+    # Use LLM to extract candidates and footer information
+    llm = get_llm()
+    candidate_llm = llm.with_structured_output(CandidateExtraction)
+
+    extract_prompt = ChatPromptTemplate.from_messages([
+        ("system", (
+            "You are an enterprise entity resolution analyst.\n"
+            "Analyze the website text and WHOIS registrant data below.\n"
+            "Extract any exact corporate legal entity names (e.g. containing Inc, LLC, Ltd, Private Limited, GmbH, Corp).\n"
+            "Determine if a valid legal company name is explicitly declared in the copyright notice or footer text."
+        )),
+        ("user", "Website Text:\n{web_text}\n\nWHOIS Registrant Org: {whois_org}")
+    ])
+
+    whois_org = whois_info.get("org") or "N/A"
+    extraction = None
+    try:
+        extract_chain = extract_prompt | candidate_llm
+        extraction = await extract_chain.ainvoke({
+            "web_text": web_text[:8000] if web_text else "No website content scraped.",
+            "whois_org": whois_org
+        })
+    except Exception as ee:
+        logger.warning(f"Failed to extract candidates using LLM: {str(ee)}")
+        # Programmatic fallback candidate extraction
+        candidate_names = []
+        if whois_org and whois_org != "N/A" and not whois_org.startswith("http") and "." not in whois_org:
+            candidate_names.append(whois_org)
+        if domain:
+            base_name = domain.split('.')[0].capitalize()
+            if base_name not in candidate_names:
+                candidate_names.append(base_name)
+        if not candidate_names:
+            candidate_names.append(query)
+            
+        has_footer_legal = False
+        if web_text:
+            for name in candidate_names:
+                if len(name) > 3 and name.lower() in web_text.lower():
+                    has_footer_legal = True
+                    break
+                    
+        extraction = CandidateExtraction(
+            candidate_names=candidate_names,
+            has_footer_legal_entity=has_footer_legal,
+            explanation=f"LLM extraction failure: {str(ee)}"
+        )
+
+    # Step 5: Search Regulatory registries for candidates
+    registry_matches = []
+    sec_matches = []
+    
+    # Query registries
+    for name in extraction.candidate_names[:2]:
+        if not name or name.lower() in ["not found", "n/a", "private", "redacted"]:
+            continue
+            
+        # 1. SEC CIK search
+        try:
+            sec_res = await sec_client.get_cik_by_name_or_ticker(name)
+            if sec_res and sec_res != "Not found" and not str(sec_res).startswith("SEC lookup failed"):
+                sec_matches.append({"name": name, "cik": sec_res})
+        except Exception:
+            pass
+            
+        # 2. GLEIF lookup
+        try:
+            gleif_res = await gleif_client.search_lei(name)
+            if gleif_res:
+                registry_matches.extend(gleif_res)
+        except Exception:
+            pass
+            
+        # 3. OpenCorporates / Companies House lookup
+        try:
+            oc_res = await opencorporates.search_company(name)
+            if oc_res:
+                registry_matches.extend(oc_res)
         except Exception:
             pass
 
-    # Await all gathering tasks
-    tasks = [sec_task, web_task, wiki_task]
-    if whois_task:
-        tasks.append(whois_task)
-    if crt_task:
-        tasks.append(crt_task)
+    # Step 6: Resolve Canonical Consensus Entity using LLM
+    consensus_llm = llm.with_structured_output(ConsensusEntityResolution)
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    sec_res = results[0]
-    web_res = results[1]
-    wiki_res = results[2]
-    whois_res = results[3] if len(results) > 3 else "N/A"
-    crt_res = results[4] if len(results) > 4 else "N/A"
-
-    # Format evidence payload
-    evidence_text = (
-        f"--- SEC EDGAR Registry Lookup ---\n{sec_res}\n\n"
-        f"--- DuckDuckGo Corporate Search ---\n{web_res}\n\n"
-        f"--- Wikipedia Registry Search ---\n{wiki_res}\n\n"
-        f"--- DNS & WHOIS Registry Record ---\n{whois_res}\n\n"
-        f"--- Certificate Transparency Logs ---\n{crt_res}\n"
-    )
-
-    # Invoke LLM for structured reconciliation
-    llm = get_llm()
-    structured_llm = llm.with_structured_output(ResolutionResult)
-
-    system_prompt = (
-        "You are an elite corporate intelligence reconciliation manager.\n"
-        "Your task is to analyze raw evidence gathered from multiple independent registries and tools, "
-        "reconcile candidates, and determine if consensus can be reached.\n\n"
-        "Reconcilation & Prioritization Rules:\n"
-        "1. Identify and classify the query input as one of: Public Company, Private Company, Brand, Product, Subsidiary, Business Unit, Regional Entity, Domain, Stock Ticker.\n"
-        "2. If the input is a Brand, Product, Business Unit, or Subsidiary, you MUST resolve both its 'immediate_parent' and 'ultimate_parent' company names.\n"
-        "3. Prioritize SEC EDGAR filings, official investor relations pages, and official corporate websites when determining the canonical legal entity.\n"
-        "4. Treat WHOIS/RDAP registrant organizations strictly as supporting metadata, never as the canonical corporate parent identity.\n"
-        "5. If multiple legal entities belong to the same corporate group (e.g. YouTube, Google LLC, Alphabet Inc.), do NOT treat this as ambiguous. Set the ultimate parent company (e.g., Alphabet Inc.) as the main consensus 'legal_name', and list the other entities and relationships in the `corporate_group_entities` list.\n"
-        "6. Set is_ambiguous = True only when authoritative registries (SEC, official corporate listings) disagree on the canonical parent company and the conflict cannot be resolved with evidence.\n"
-        "7. NEVER invent or guess fields; derive values strictly from the collected text evidence."
-    )
-
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", "Query: {query}\n\nRaw Evidence Collected:\n{evidence}")
+    consensus_prompt = ChatPromptTemplate.from_messages([
+        ("system", (
+            "You are an enterprise corporate entity resolution manager.\n"
+            "Review the scraped candidates, WHOIS data, and regulatory matches below.\n"
+            "Resolve the absolute canonical legal corporate entity name and its country of registration.\n"
+            "Do NOT guess or invent fields."
+        )),
+        ("user", (
+            "User Query: {query}\n"
+            "Official Domain: {domain}\n"
+            "Extracted Footer Candidates: {candidates}\n"
+            "WHOIS Org: {whois_org}\n"
+            "Regulatory Matches: {registry_matches}\n"
+            "SEC Matches: {sec_matches}"
+        ))
     ])
 
     resolved = None
     try:
-        chain = prompt | structured_llm
-        resolved = await chain.ainvoke({
-            "query": query,
-            "evidence": evidence_text
+        consensus_chain = consensus_prompt | consensus_llm
+        resolved = await consensus_chain.ainvoke({
+            "query": parent_name or query,
+            "domain": domain or "N/A",
+            "candidates": ", ".join(extraction.candidate_names),
+            "whois_org": whois_org,
+            "registry_matches": json.dumps(registry_matches[:5]),
+            "sec_matches": json.dumps(sec_matches)
         })
-    except Exception as e:
-        logger.warning(
-            f"Gemini API is unreachable or failed to respond ({str(e)}). "
-            f"Bypassing AI verification and executing programmatic heuristics consensus merger."
+    except Exception as ce:
+        logger.error(f"LLM Consensus failed: {str(ce)}")
+        # Programmatic consensus fallback
+        canonical = extraction.candidate_names[0]
+        if sec_matches:
+            canonical = sec_matches[0]["name"]
+        elif registry_matches:
+            canonical = registry_matches[0]["name"]
+            
+        resolved = ConsensusEntityResolution(
+            canonical_company=canonical,
+            official_domain=domain or "",
+            country="United States" if sec_matches else (registry_matches[0].get("country", "Global") if registry_matches else "Global"),
+            legal_name=canonical,
+            registration_number=sec_matches[0]["cik"] if sec_matches else (registry_matches[0]["registration_number"] if registry_matches else None),
+            explanation=f"Consensus fallback: {str(ce)}"
         )
-        
-        # 1. Look for CIK
-        resolved_cik = None
-        if sec_res and not str(sec_res).startswith("SEC lookup failed") and sec_res != "Not found":
-            resolved_cik = str(sec_res)
-            
-        # 2. Look for WHOIS organization
-        resolved_name = query
-        resolved_domain = query if is_domain(query) else None
-        
-        if whois_res and "WHOIS lookup error" not in whois_res and whois_res != "N/A":
-            org_match = re.search(r'Registrant Org:\s*(.+)', whois_res)
-            if org_match:
-                org_val = org_match.group(1).strip()
-                if org_val and org_val.lower() not in ["not found", "n/a", "private", "redacted"]:
-                    resolved_name = org_val
-            
-        # 3. Clean and normalize name
-        if resolved_name == query and is_domain(query):
-            base_name = query.split(".")[0].capitalize()
-            resolved_name = base_name
-            
-        if resolved_name.lower() == query.lower() and not is_domain(query):
-            resolved_name = query.title()
 
-        company_info = {
-            "status": "success",
-            "legal_name": resolved_name,
-            "domain": resolved_domain or (f"{query.lower()}.com" if not is_domain(query) else query),
-            "cik": resolved_cik,
-            "ticker": None,
-            "hq_country": "United States" if resolved_cik else "Global",
-            "parent_company": None,
-            "confidence": 0.75,
-            "metadata_fields": {
-                "ai_verification_skipped": True,
-                "reason": f"Gemini API network failure: {str(e)}",
-                "resolved_candidates": [
-                    {
-                        "source": "SEC EDGAR CIK",
-                        "legal_name": resolved_name,
-                        "cik": resolved_cik,
-                        "confidence_score": 0.80 if resolved_cik else 0.0
-                    }
-                ]
-            }
+    # Step 7: Compute Entity Resolution Confidence Score
+    has_footer = extraction.has_footer_legal_entity
+    has_registry = len(registry_matches) > 0 or len(sec_matches) > 0
+    has_whois = False
+    if whois_org and whois_org.lower() not in ["not found", "n/a", "private", "redacted"]:
+        for candidate in extraction.candidate_names:
+            if whois_org.lower() in candidate.lower() or candidate.lower() in whois_org.lower():
+                has_whois = True
+                break
+                
+    has_dns = len(dns_records.get("A", [])) > 0 or len(dns_records.get("MX", [])) > 0
+    has_ssl = len(ssl_domains) > 0
+    has_search = True
+    has_consensus = True
+
+    confidence_score = 0
+    if has_footer: confidence_score += 40
+    if has_registry: confidence_score += 30
+    if has_whois: confidence_score += 10
+    if has_dns: confidence_score += 5
+    if has_ssl: confidence_score += 5
+    if has_search: confidence_score += 5
+    if has_consensus: confidence_score += 5
+
+    logs.append(f"Entity Resolution confidence score computed: {confidence_score}%")
+
+    company_info = {
+        "canonical_company": resolved.canonical_company,
+        "official_domain": resolved.official_domain or domain or "",
+        "domain": resolved.official_domain or domain or "",
+        "country": resolved.country,
+        "hq_country": resolved.country,
+        "legal_name": resolved.legal_name,
+        "registration_number": resolved.registration_number or (registry_matches[0]["registration_number"] if registry_matches else None),
+        "confidence": float(confidence_score) / 100.0,
+        "cik": sec_matches[0]["cik"] if sec_matches else None,
+        "entity_classification": "Public Company" if sec_matches else "Private Company",
+        "original_query": query,
+        "metadata_fields": {
+            "explanation": resolved.explanation,
+            "resolved_candidates": registry_matches + sec_matches,
+            "corporate_group_entities": []
         }
-        
-        logs.append(
-            f"Gemini API is unreachable or failed to respond ({str(e)}). Bypassing AI verification "
-            f"and continuing with best evidence-backed candidate: '{resolved_name}'."
-        )
-        
+    }
+
+    # Determine success or failure based on whether we have a resolved company name
+    has_resolved_entity = bool(resolved.canonical_company or resolved.legal_name)
+    
+    if has_resolved_entity:
+        company_info["status"] = "success"
+        logs.append(f"Successfully resolved entity: '{resolved.canonical_company}' (Confidence: {confidence_score}%)")
         return {
             **state,
             "company_info": company_info,
             "logs": logs
         }
-
-    # Process failure or success policy
-    if resolved.is_ambiguous or not resolved.consensus or resolved.consensus.confidence < 0.7:
+    else:
         error_msg = (
-            "Unable to confidently resolve the requested company. "
-            "Please provide additional information such as the official website, country, or stock ticker."
+            "Unable to resolve the requested company. No legal entity name or domain could be verified "
+            "from public registries, website content, or search engines. Please clarify by providing "
+            "the official website address or exact legal name."
         )
-        logs.append(f"Resolution Failed: {resolved.explanation}")
+        company_info["status"] = "failed"
+        company_info["error"] = error_msg
+        logs.append("Resolution failed: No canonical company resolved. Requesting user clarification.")
         return {
             **state,
-            "company_info": {
-                "status": "failed",
-                "error": error_msg,
-                "explanation": resolved.explanation
-            },
+            "company_info": company_info,
             "logs": logs,
             "errors": state.get("errors", []) + [error_msg]
         }
-
-    # Successful resolution
-    consensus = resolved.consensus
-    canonical_parent = consensus.ultimate_parent or consensus.legal_name
-    company_info = {
-        "status": "success",
-        "original_query": query,
-        "entity_classification": consensus.entity_classification,
-        "legal_name": canonical_parent,
-        "domain": consensus.domain,
-        "cik": consensus.cik,
-        "ticker": consensus.ticker,
-        "hq_country": consensus.hq_country,
-        "immediate_parent": consensus.immediate_parent,
-        "ultimate_parent": consensus.ultimate_parent,
-        "confidence": consensus.confidence,
-        "metadata_fields": {
-            "explanation": resolved.explanation,
-            "resolved_candidates": [c.dict() for c in resolved.candidates],
-            "corporate_group_entities": [c.dict() for c in consensus.corporate_group_entities]
-        }
-    }
-
-    logs.append(f"Successfully resolved entity: '{consensus.legal_name}' (Confidence: {consensus.confidence * 100:.0f}%)")
-    logger.info(f"Reconciled entity consensus reached: {consensus.legal_name}")
-
-    return {
-        **state,
-        "company_info": company_info,
-        "logs": logs
-    }

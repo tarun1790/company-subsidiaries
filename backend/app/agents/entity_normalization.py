@@ -35,7 +35,7 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
         "Your task is to review candidate company name variants and group duplicates representing the same legal entity.\n"
         "RULES:\n"
         "1. Reconcile ONLY from the provided candidate names list.\n"
-        "2. Resolve typographical errors, regional variants, and missing endings (e.g. 'Netflix UK' / 'Netflix Services UK Limited' -> 'Netflix Services UK Limited').\n"
+        "2. Resolve typographical errors, regional variants, and missing endings (e.g. 'Acme UK' / 'Acme Services UK Limited' -> 'Acme Services UK Limited').\n"
         "3. For each group, output a single normalized canonical legal name."
     )
     

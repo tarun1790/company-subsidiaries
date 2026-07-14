@@ -1,8 +1,8 @@
 {
   "source_authority": {
-    "sec_filings": 0.50,
-    "public_registry": 0.40,
-    "annual_report_pdf": 0.45,
+    "sec_filings": 0.85,
+    "public_registry": 0.70,
+    "annual_report_pdf": 0.75,
     "official_website": 0.30,
     "dns_ssl_verification": 0.20,
     "web_research": 0.10

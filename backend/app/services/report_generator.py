@@ -229,37 +229,43 @@ class ReportGenerator:
         story.append(Spacer(1, 20))
 
         # =========================================================================
-        # PAGE 3+: VERIFIED SUBSIDIARIES TABLE
+        # PAGE 3+: DISCOVERED SUBSIDIARIES BY CONFIDENCE TIER TABLE
         # =========================================================================
-        story.append(Paragraph("Verified Subsidiaries & Entities", h1_style))
+        story.append(Paragraph("Discovered Entities by Confidence Tier", h1_style))
         story.append(Paragraph(
-            "The following list represents entities that have been compiled and resolved from independent data sources. "
-            "Each item includes direct references, parent associations, and calculated confidence parameters.",
+            "The corporate structural discovery pipeline resolved candidates and sorted them by confidence tiers. "
+            "Hierarchy reconstruction is recursively pursued using Verified and High Confidence entities, "
+            "while Moderate, Low Confidence, and Unverified entities are preserved for auditing.",
             body_style
         ))
         story.append(Spacer(1, 10))
 
-        # Table headers
-        table_data = [[
-            Paragraph("Entity Name", table_header_style),
-            Paragraph("Country", table_header_style),
-            Paragraph("Ownership", table_header_style),
-            Paragraph("Parent Entity", table_header_style),
-            Paragraph("Confidence", table_header_style),
-        ]]
+        # Helper method for confidence tiering
+        def get_confidence_tier(confidence: float) -> str:
+            if confidence >= 0.95:
+                return "Verified (95-100%)"
+            elif confidence >= 0.80:
+                return "High Confidence (80-94%)"
+            elif confidence >= 0.60:
+                return "Moderate Confidence (60-79%)"
+            elif confidence >= 0.40:
+                return "Low Confidence (40-59%)"
+            else:
+                return "Unverified (<40%)"
 
+        tiers = {
+            "Verified (95-100%)": [],
+            "High Confidence (80-94%)": [],
+            "Moderate Confidence (60-79%)": [],
+            "Low Confidence (40-59%)": [],
+            "Unverified (<40%)": []
+        }
         for sub in subsidiaries:
-            conf_percent = f"{sub.get('confidence', 0.0) * 100:.0f}%"
-            table_data.append([
-                Paragraph(sub.get("name") or "N/A", table_body_style),
-                Paragraph(sub.get("country") or "N/A", table_body_style),
-                Paragraph(sub.get("ownership") or "N/A", table_body_style),
-                Paragraph(sub.get("parent") or "Direct Parent", table_body_style),
-                Paragraph(conf_percent, table_body_style),
-            ])
+            conf = sub.get("confidence", 0.0)
+            tier_name = get_confidence_tier(conf)
+            tiers[tier_name].append(sub)
 
-        subs_table = Table(table_data, colWidths=[2.2 * inch, 1.1 * inch, 1.0 * inch, 1.4 * inch, 0.8 * inch], repeatRows=1)
-        subs_table.setStyle(TableStyle([
+        t_style = TableStyle([
             ('BACKGROUND', (0,0), (-1,0), c_primary),
             ('ALIGN', (0,0), (-1,-1), 'LEFT'),
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
@@ -268,9 +274,41 @@ class ReportGenerator:
             ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, c_bg_light]),
             ('BOX', (0,0), (-1,-1), 0.5, c_text_muted),
             ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
-        ]))
-        
-        story.append(subs_table)
+        ])
+
+        any_displayed = False
+        for tier_name, tier_subs in tiers.items():
+            if not tier_subs:
+                continue
+            any_displayed = True
+            story.append(Paragraph(f"Tier: {tier_name}", h2_style))
+            
+            table_data = [[
+                Paragraph("Legal Name / Query", table_header_style),
+                Paragraph("Relationship", table_header_style),
+                Paragraph("Confidence", table_header_style),
+                Paragraph("Sources", table_header_style),
+                Paragraph("Reason for Muted Confidence / Status", table_header_style),
+            ]]
+            
+            for sub in tier_subs:
+                conf_pct = f"{sub.get('confidence', 0.0) * 100:.0f}%"
+                reasons = sub.get("reduced_confidence_reason") or "Fully verified"
+                table_data.append([
+                    Paragraph(sub.get("name") or "N/A", table_body_style),
+                    Paragraph(sub.get("relationship_type") or "N/A", table_body_style),
+                    Paragraph(conf_pct, table_body_style),
+                    Paragraph(str(sub.get("source_count", len(sub.get("evidences", [])))), table_body_style),
+                    Paragraph(reasons, table_body_style),
+                ])
+                
+            tier_table = Table(table_data, colWidths=[1.8 * inch, 1.2 * inch, 0.8 * inch, 0.7 * inch, 2.0 * inch], repeatRows=1)
+            tier_table.setStyle(t_style)
+            story.append(tier_table)
+            story.append(Spacer(1, 15))
+
+        if not any_displayed:
+            story.append(Paragraph("No candidate entities were discovered in any confidence tier.", body_style))
         story.append(Spacer(1, 20))
 
         # =========================================================================
@@ -331,6 +369,20 @@ class ReportGenerator:
         rows = []
         for sub in subsidiaries:
             ev_urls = [ev.get("source_url") for ev in sub.get("evidences", []) if ev.get("source_url")]
+            conf = sub.get("confidence", 0.0)
+            
+            # Map to confidence tier
+            if conf >= 0.95:
+                tier = "Verified (95-100%)"
+            elif conf >= 0.80:
+                tier = "High Confidence (80-94%)"
+            elif conf >= 0.60:
+                tier = "Moderate Confidence (60-79%)"
+            elif conf >= 0.40:
+                tier = "Low Confidence (40-59%)"
+            else:
+                tier = "Unverified (<40%)"
+
             rows.append({
                 "Entity Name": sub.get("name"),
                 "Legal Name": sub.get("legal_name"),
@@ -339,8 +391,10 @@ class ReportGenerator:
                 "Direct Parent": sub.get("parent"),
                 "Relationship Type": sub.get("relationship_type"),
                 "Registration Number": sub.get("registration_number"),
-                "Confidence Score": sub.get("confidence"),
-                "Sources Count": len(sub.get("evidences", [])),
+                "Confidence Score": f"{conf * 100:.0f}%",
+                "Confidence Tier": tier,
+                "Reduced Confidence Reason": sub.get("reduced_confidence_reason"),
+                "Sources Count": sub.get("source_count", len(sub.get("evidences", []))),
                 "Source URLs": ", ".join(ev_urls),
                 "Notes": sub.get("notes")
             })

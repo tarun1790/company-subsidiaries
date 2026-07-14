@@ -8,9 +8,17 @@ def get_base_name_key(name: str) -> str:
         return ""
     n = name.lower().strip()
     n = re.sub(r"[^\w\s]", "", n)
-    endings = ["ltd", "limited", "llc", "gmbh", "inc", "incorporated", "corp", "corporation", "co", "company"]
+    endings = ["ltd", "limited", "llc", "gmbh", "inc", "incorporated", "corp", "corporation", "co", "company", "sa", "sarl", "as", "ab", "bv", "ag", "kft", "sro", "spa", "pty"]
     words = n.split()
-    return " ".join([w for w in words if w not in endings]).strip()
+    base = " ".join([w for w in words if w not in endings]).strip()
+    
+    # Extract suffix to differentiate regional legal entities
+    suffix = ""
+    for w in words:
+        if w in endings:
+            suffix = w
+            break
+    return f"{base}_{suffix}" if suffix else base
 
 async def evidence_fusion_agent(state: AgentState) -> AgentState:
     """Agent 9: Merges duplicate corporate entities, groups evidence trail matrices."""
@@ -41,13 +49,40 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
     parent_key = get_base_name_key(legal_name)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     
+    # Group candidates from current iteration
     for sub in subs:
         name = sub.get("name")
         if not name:
             continue
+        if isinstance(name, dict):
+            logger.error(f"DEBUG: Found sub with name as dict: {sub}")
+            name = name.get("name") or str(name)
         key = get_base_name_key(name)
-        if key == parent_key or not key:
-            continue # Skip ultimate parent itself
+        if not key:
+            continue
+            
+        # Refined Parent Collision check:
+        if key == parent_key:
+            n_clean = re.sub(r"[^\w]", "", name.lower())
+            p_clean = re.sub(r"[^\w]", "", legal_name.lower())
+            if n_clean == p_clean:
+                continue
+            if len(name.split()) == 1 and name.lower() in legal_name.lower():
+                continue
+            
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(sub)
+        
+    # Merge existing subsidiaries from previous iterations
+    existing_subs = state.get("subsidiaries") or []
+    for sub in existing_subs:
+        name = sub.get("name")
+        if not name:
+            continue
+        key = get_base_name_key(name)
+        if not key:
+            continue
             
         if key not in grouped:
             grouped[key] = []
@@ -74,13 +109,14 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
         ownership = next((it.get("ownership") for it in items if it.get("ownership") and it["ownership"] not in ["Not Publicly Disclosed", "Unknown", ""]), "Not Publicly Disclosed")
         reg_num = next((it.get("registration_number") for it in items if it.get("registration_number")), None)
         rel_type = next((it.get("relationship_type") for it in items if it.get("relationship_type") and it["relationship_type"] != "Subsidiary"), "Subsidiary")
+        parent_name = next((it.get("parent") for it in items if it.get("parent")), legal_name)
         
         fused_subs.append({
             "name": best_name,
             "legal_name": best_name,
             "country": country,
             "ownership": ownership,
-            "parent": legal_name,
+            "parent": parent_name,
             "relationship_type": rel_type,
             "registration_number": reg_num,
             "confidence": 0.0, # Will be set by scoring agent
@@ -88,8 +124,9 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
             "notes": items[0].get("notes") or "Fused candidate entity."
         })
         
-    logs.append(f"Evidence Fusion consolidated candidates count: {len(fused_subs)} (down from {len(subs)}).")
+    logs.append(f"Evidence Fusion consolidated candidates count: {len(fused_subs)} (down from {len(subs) + len(existing_subs)}).")
     return {
+        **state,
         "subsidiaries": fused_subs,
         "logs": logs
     }

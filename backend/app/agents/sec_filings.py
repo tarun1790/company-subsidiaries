@@ -25,75 +25,80 @@ async def sec_filings_agent(state: AgentState) -> AgentState:
 
     try:
         filings = await sec_client.get_latest_filings(cik)
-        # Find latest 10-K
-        ten_k = next((f for f in filings if f["form"] == "10-K"), None)
+        # Find up to 3 latest 10-K filings
+        ten_ks = [f for f in filings if f["form"] == "10-K"]
+        ten_ks = ten_ks[:3]
         
-        if not ten_k:
+        if not ten_ks:
             logs.append("No 10-K filing found in recent SEC submissions.")
             return {
                 "sec_results": [],
                 "logs": logs
             }
 
-        accession = ten_k["accessionNumber"]
-        filing_date_str = ten_k.get("filingDate")
-        
-        is_historical = False
-        if filing_date_str:
-            try:
-                from datetime import datetime
-                f_date = datetime.strptime(filing_date_str, "%Y-%m-%d")
-                if (datetime.now() - f_date).days > 1095:
-                    is_historical = True
-            except Exception:
-                pass
-                
-        if is_historical:
-            logs.append("Searching SEC EDGAR...")
-            logs.append("No active SEC registrant found.")
-            logs.append(f"Historical lookup: ✓ {legal_name} located (CIK: {cik}).")
-            logs.append("Status: Acquired or Private Company.")
-            logs.append("Recent SEC filings are unavailable because the company is no longer publicly traded.")
-            logs.append(f"Continuing with historical 10-K filing (Date: {filing_date_str}). Downloading Exhibit 21...")
-        else:
-            logs.append(f"Found active SEC registrant: {legal_name} (CIK: {cik}).")
-            logs.append(f"Found 10-K filing (Date: {filing_date_str}). Downloading Exhibit 21...")
-        
-        ex21_html = await sec_client.get_exhibit_21(cik, accession)
-        if not ex21_html:
-            logs.append("Exhibit 21 (List of Subsidiaries) was not found in the 10-K directory.")
-            return {
-                "sec_results": [],
-                "logs": logs
-            }
-            
-        logs.append("Exhibit 21 downloaded. Parsing subsidiaries...")
-        extracted_subs = sec_client.parse_exhibit_21_html(ex21_html)
-        
-        clean_acc = accession.replace("-", "")
-        evidence_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/"
-        
-        discovered = []
-        for sub in extracted_subs:
-            # Build structured subsidiary item
-            sub_name = sub["name"]
-            discovered.append({
-                "name": sub_name,
-                "legal_name": sub_name,
-                "country": sub["country"],
-                "ownership": sub["ownership"],
-                "parent": legal_name,
-                "relationship_type": "Subsidiary",
-                "confidence": 0.95, # high confidence from official SEC Exhibit 21
-                "evidences": [{
-                    "source_type": "SEC Filings",
-                    "source_url": evidence_url,
-                    "extracted_text": f"Found in Exhibit 21 of 10-K: {sub_name} incorporation jurisdiction: {sub['country']}"
-                }],
-                "notes": sub["notes"]
-            })
+        logs.append(f"Found {len(ten_ks)} recent 10-K filings. Downloading Exhibit 21 lists concurrently...")
 
-        logs.append(f"Extracted {len(discovered)} subsidiaries from SEC Exhibit 21.")
+        async def process_one_ten_k(f):
+            accession = f["accessionNumber"]
+            filing_date_str = f.get("filingDate")
+            
+            ex21_html = await sec_client.get_exhibit_21(cik, accession)
+            if not ex21_html:
+                logger.warning(f"Exhibit 21 not found for 10-K accession: {accession}")
+                return []
+                
+            extracted_subs = sec_client.parse_exhibit_21_html(ex21_html)
+            clean_acc = accession.replace("-", "")
+            evidence_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/"
+            
+            results = []
+            for sub in extracted_subs:
+                sub_name = sub["name"]
+                results.append({
+                    "name": sub_name,
+                    "legal_name": sub_name,
+                    "country": sub["country"],
+                    "ownership": sub["ownership"],
+                    "parent": legal_name,
+                    "relationship_type": "Subsidiary",
+                    "confidence": 0.95, # high confidence from official SEC Exhibit 21
+                    "evidences": [{
+                        "source_type": "SEC Filings",
+                        "source_url": evidence_url,
+                        "extracted_text": f"Found in Exhibit 21 of 10-K (Filing Date: {filing_date_str}): {sub_name} incorporation jurisdiction: {sub['country']}"
+                    }],
+                    "notes": sub["notes"]
+                })
+            return results
+
+        # Run concurrent downloads
+        tasks = [process_one_ten_k(f) for f in ten_ks]
+        all_results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+        from app.agents.evidence_fusion import get_base_name_key
+        
+        dedup = {}
+        for res_list in all_results_lists:
+            if isinstance(res_list, Exception):
+                logger.error(f"Error processing historical 10-K filing: {str(res_list)}")
+                continue
+            for item in res_list:
+                key = get_base_name_key(item["name"])
+                if not key:
+                    continue
+                if key not in dedup:
+                    dedup[key] = item
+                else:
+                    # Merge evidence trails
+                    existing_item = dedup[key]
+                    existing_item["evidences"].extend(item["evidences"])
+                    if not existing_item.get("ownership") and item.get("ownership"):
+                        existing_item["ownership"] = item["ownership"]
+                    if not existing_item.get("country") and item.get("country"):
+                        existing_item["country"] = item["country"]
+
+        discovered = list(dedup.values())
+        logs.append(f"Extracted and merged {len(discovered)} unique subsidiaries from multiple historical Exhibit 21 filings.")
         
         return {
             "sec_results": discovered,

@@ -109,10 +109,22 @@ async def get_company_details(company_id: uuid.UUID, db: AsyncSession = Depends(
             "confidence": (company.metadata_fields or {}).get("confidence")
         }
 
+        subs_list = []
+        for s in subsidiaries:
+            subs_list.append({
+                "id": str(s.id),
+                "name": s.name,
+                "country": s.country,
+                "ownership": s.ownership,
+                "relationship_type": s.relationship_type,
+                "confidence": s.confidence,
+                "evidences": [{"source_type": ev.source_type, "source_url": ev.source_url, "extracted_text": ev.extracted_text} for ev in s.evidences]
+            })
+
         # Format output payload
         return {
             "company": company_dict,
-            "subsidiaries": subsidiaries,
+            "subsidiaries": subs_list,
             "knowledge_graph": knowledge_graph,
             "reports": {
                 "pdf": f"/api/reports/download/{report.pdf_path}" if report and report.pdf_path else None,
@@ -128,7 +140,7 @@ async def get_company_details(company_id: uuid.UUID, db: AsyncSession = Depends(
         raise HTTPException(status_code=500, detail="Internal server error fetching details.")
 
 
-@router.websocket("/ws/pipeline/{query}")
+@router.websocket("/ws/pipeline/{query:path}")
 async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession = Depends(get_db)):
     """WebSocket endpoint to initiate, track, and stream the 9-agent pipeline updates."""
     await websocket.accept()
@@ -262,8 +274,9 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
             raise WebSocketDisconnect()
 
     try:
-        # 1. Run multi-agent pipeline
-        final_state = await execute_pipeline(query, progress_hook)
+        # 1. Run multi-agent pipeline with thread_id for state checkpointing
+        thread_id = str(uuid.uuid4())
+        final_state = await execute_pipeline(query, progress_hook, thread_id=thread_id)
         
         comp_info = final_state["company_info"]
         if comp_info.get("status") == "failed":
@@ -365,4 +378,7 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
         except Exception:
             pass
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass

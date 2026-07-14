@@ -9,18 +9,18 @@ def get_llm():
     if not api_key:
         logger.warning("GEMINI_API_KEY is not configured. LLM calls may fail.")
         
-    pro_model = ChatGoogleGenerativeAI(
-        model="gemini-2.5-pro",
+    flash_model = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
         google_api_key=api_key,
         temperature=0.0,
         max_retries=3
     )
     
-    flash_model = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+    pro_model = ChatGoogleGenerativeAI(
+        model="gemini-2.5-pro",
         google_api_key=api_key,
         temperature=0.0,
-        max_retries=5
+        max_retries=2
     )
     
-    return pro_model.with_fallbacks([flash_model])
+    return flash_model.with_fallbacks([pro_model])

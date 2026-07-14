@@ -1,4 +1,5 @@
 from app.agents.state import AgentState
+import re
 from app.services.open_corporates import opencorporates
 from app.services.gleif import gleif_client
 from app.core.logging import logger
@@ -15,7 +16,6 @@ async def public_registry_agent(state: AgentState) -> AgentState:
     logger.info(f"Public Registry Agent searching for: {legal_name}")
 
     discovered = []
-    
     try:
         # Search parent company in OpenCorporates
         registry_matches = await opencorporates.search_company(legal_name)
