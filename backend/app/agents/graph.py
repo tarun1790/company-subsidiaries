@@ -188,7 +188,10 @@ async def execute_pipeline(query: str, update_hook=None, thread_id: str = None) 
     if not thread_id:
         thread_id = str(uuid.uuid4())
         
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": 100
+    }
     logger.info(f"Initiating corporate subsidiary intelligence pipeline for query: {query} | Thread ID: {thread_id}")
     
     current_state = initial_state
