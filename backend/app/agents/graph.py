@@ -145,7 +145,7 @@ def build_workflow():
         "loop_coordinator",
         route_discovery_loop
     )
-    workflow.add_edge("next_target_preparer", "sec_filings")
+    workflow.add_edge("next_target_preparer", "entity_resolution")
 
     # Compile the graph with MemorySaver checkpointer
     memory = MemorySaver()
