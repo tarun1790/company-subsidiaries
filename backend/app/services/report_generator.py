@@ -233,9 +233,7 @@ class ReportGenerator:
         # =========================================================================
         story.append(Paragraph("Discovered Entities by Confidence Tier", h1_style))
         story.append(Paragraph(
-            "The corporate structural discovery pipeline resolved candidates and sorted them by confidence tiers. "
-            "Hierarchy reconstruction is recursively pursued using Verified and High Confidence entities, "
-            "while Moderate, Low Confidence, and Unverified entities are preserved for auditing.",
+            "Relationships are shown below with their calculated confidence scores. Higher scores indicate stronger evidence based on authoritative sources.",
             body_style
         ))
         story.append(Spacer(1, 10))

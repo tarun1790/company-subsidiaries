@@ -86,19 +86,25 @@ async def knowledge_graph_builder_agent(state: AgentState) -> AgentState:
             kg_nodes.append({
                 "id": sub_id,
                 "label": sub["name"],
-                "type": sub["relationship_type"],
-                "country": sub["country"],
+                "legal_name": sub.get("legal_name") or sub["name"],
+                "relationship_type": sub.get("relationship_type") or "Subsidiary",
+                "type": sub.get("relationship_type") or "Subsidiary",
                 "confidence": sub["confidence"],
-                "evidences": sub["evidences"]
+                "verification_status": sub.get("verification_status") or "Unverified",
+                "evidences": sub.get("evidences") or [],
+                "evidence_count": len(sub.get("evidences") or []),
+                "parent": sub.get("parent") or legal_name,
+                "country": sub.get("country") or "Global",
+                "registry_id": sub.get("registration_number") or "N/A"
             })
         
         kg_edges.append({
             "source": parent_id,
             "target": sub_id,
-            "relationship": sub["relationship_type"],
-            "ownership": sub["ownership"],
+            "relationship": sub.get("relationship_type") or "Subsidiary",
+            "ownership": sub.get("ownership") or "100%",
             "confidence": sub["confidence"],
-            "evidences": sub["evidences"]
+            "evidences": sub.get("evidences") or []
         })
         
     knowledge_graph = {

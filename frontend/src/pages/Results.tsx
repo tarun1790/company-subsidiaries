@@ -34,14 +34,6 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
     const candidates: Subsidiary[] = [];
 
     subsidiaries.forEach(sub => {
-      // Exclude candidates/unverified from main categories
-      if (sub.confidence < 0.80) {
-        if (sub.confidence >= 0.50) {
-          candidates.push(sub);
-        }
-        return;
-      }
-
       const rel = (sub.relationship_type || '').toLowerCase().trim();
       if (rel === 'brand') {
         brands.push(sub);
@@ -53,6 +45,11 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
         parents.push(sub);
       } else {
         subs.push(sub);
+      }
+
+      // Keep candidates tab for entities below 80% confidence
+      if (sub.confidence < 0.80) {
+        candidates.push(sub);
       }
     });
 
@@ -454,9 +451,17 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                       <span className="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
                         {sub.relationship_type || 'Subsidiary'}
                       </span>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                        sub.confidence >= 0.8 ? 'bg-brand-50 text-brand-700' : 'bg-amber-50 text-amber-700'
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${
+                        sub.confidence >= 0.95 ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                        sub.confidence >= 0.80 ? 'bg-emerald-50/50 text-emerald-600 border-emerald-100/50' :
+                        sub.confidence >= 0.60 ? 'bg-amber-50 text-amber-700 border-amber-100' :
+                        sub.confidence >= 0.40 ? 'bg-orange-50 text-orange-700 border-orange-100' :
+                        'bg-rose-50 text-rose-700 border-rose-100'
                       }`}>
+                        {sub.confidence >= 0.95 ? '🟢 ' :
+                         sub.confidence >= 0.80 ? '🟢 ' :
+                         sub.confidence >= 0.60 ? '🟡 ' :
+                         sub.confidence >= 0.40 ? '🟠 ' : '🔴 '}
                         {(sub.confidence * 100).toFixed(0)}% Match
                       </span>
                     </div>

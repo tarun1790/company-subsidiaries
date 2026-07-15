@@ -93,6 +93,18 @@ async def confidence_scoring_agent(state: AgentState) -> AgentState:
             
         sub["reduced_confidence_reason"] = ", ".join(reasons) if reasons else "Fully verified across multiple authoritative databases"
         
+        # Assign verification status based on confidence thresholds
+        if confidence >= 0.95:
+            sub["verification_status"] = "Verified"
+        elif confidence >= 0.80:
+            sub["verification_status"] = "High Confidence"
+        elif confidence >= 0.60:
+            sub["verification_status"] = "Moderate Confidence"
+        elif confidence >= 0.40:
+            sub["verification_status"] = "Low Confidence"
+        else:
+            sub["verification_status"] = "Unverified"
+
         scored_subs.append(sub)
             
     scored_subs.sort(key=lambda x: (-x["confidence"], x["name"]))

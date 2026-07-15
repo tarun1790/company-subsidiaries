@@ -185,9 +185,9 @@ class SECEdgarClient:
                     # Look for typical formats: [Name, Jurisdiction] or [Name, Percent, Jurisdiction]
                     name = cols[0]
                     name_lower = name.lower()
-                    if name_lower in ["name", "company", "subsidiary", "entity", "jurisdiction", "country", "state", "ownership", "percent", "shares"]:
+                    if name_lower in ["name", "company", "subsidiary", "entity", "jurisdiction", "country", "state", "ownership", "percent", "shares", "legal name", "parent"]:
                         continue
-                    if any(h in name_lower for h in ["name of", "subsidiary", "jurisdiction", "state of", "country", "incorporation", "percent owned"]):
+                    if any(h in name_lower for h in ["name of", "subsidiary", "jurisdiction", "state of", "country", "incorporation", "percent owned", "legal name", "parent"]):
                         continue
                     
                     # Robust right-to-left scan to isolate jurisdiction and percentage

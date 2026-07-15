@@ -19,16 +19,10 @@ interface CorporateTreeProps {
 export const CorporateTree: React.FC<CorporateTreeProps> = ({ parentName, subsidiaries, onSelectEntity }) => {
   const [collapsedNodes, setCollapsedNodes] = useState<Record<string, boolean>>({});
 
-  // 1. Filter out invalid/unverified subsidiaries
+  // 1. Keep all discovered subsidiaries that have a name
   const verifiedSubs = useMemo(() => {
     return subsidiaries.filter((sub) => {
-      return (
-        sub.name &&
-        sub.legal_name &&
-        sub.evidences &&
-        sub.evidences.length > 0 &&
-        sub.confidence >= 0.8
-      );
+      return !!sub.name;
     });
   }, [subsidiaries]);
 
@@ -73,6 +67,16 @@ export const CorporateTree: React.FC<CorporateTreeProps> = ({ parentName, subsid
     setCollapsedNodes((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const getConfidenceBadge = (confidence: number) => {
+    const score = Math.round(confidence * 100);
+    let emoji = "🔴";
+    if (score >= 95) emoji = "🟢";
+    else if (score >= 80) emoji = "🟢";
+    else if (score >= 60) emoji = "🟡";
+    else if (score >= 40) emoji = "🟠";
+    return { emoji, score };
+  };
+
   // Recursively render node cards and SVG paths
   const renderNode = (node: TreeNode, depth: number = 0): React.ReactNode => {
     const isCollapsed = collapsedNodes[node.id];
@@ -92,10 +96,20 @@ export const CorporateTree: React.FC<CorporateTreeProps> = ({ parentName, subsid
           }`}
         >
           {/* Card Header & Collapse Toggle */}
-          <div className="flex items-start justify-between gap-2">
-            <span className={`text-[10px] font-bold uppercase tracking-wider ${isRoot ? 'text-brand-300' : 'text-slate-400'}`}>
-              {isRoot ? 'Parent Group' : node.item?.relationship_type || 'Subsidiary'}
-            </span>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 overflow-hidden">
+              <span className={`text-[10px] font-bold uppercase tracking-wider truncate ${isRoot ? 'text-brand-300' : 'text-slate-400'}`}>
+                {isRoot ? 'Parent Group' : node.item?.relationship_type || 'Subsidiary'}
+              </span>
+              {!isRoot && node.item && (() => {
+                const { emoji, score } = getConfidenceBadge(node.item.confidence);
+                return (
+                  <span className="text-[10px] font-bold shrink-0 bg-slate-50 border border-slate-100 rounded-full px-1.5 py-0.2 select-none text-slate-600">
+                    {emoji} {score}%
+                  </span>
+                );
+              })()}
+            </div>
             {hasChildren && (
               <button 
                 onClick={(e) => toggleCollapse(node.id, e)}
@@ -115,20 +129,30 @@ export const CorporateTree: React.FC<CorporateTreeProps> = ({ parentName, subsid
 
           {/* Additional details */}
           {!isRoot && node.item && (
-            <div className="mt-2.5 space-y-1 border-t border-slate-150 pt-2.5 text-[11px] text-slate-600 font-medium">
+            <div className="mt-2.5 space-y-1 border-t border-slate-100 pt-2.5 text-[11px] text-slate-600 font-medium">
               <div>
-                <span className="text-slate-400">Legal Name:</span> {node.item.legal_name}
+                <span className="text-slate-400">Legal Name:</span> {node.item.legal_name || node.item.name}
               </div>
-              <div>
-                <span className="text-slate-400">Ownership:</span> {node.item.ownership || 'Unknown'}
-              </div>
+              {node.item.ownership && (
+                <div>
+                  <span className="text-slate-400">Ownership:</span> {node.item.ownership}
+                </div>
+              )}
               <div>
                 <span className="text-slate-400">Country:</span> {node.item.country || 'Global'}
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-400">Confidence:</span>
-                <span className={`font-semibold ${node.item.confidence >= 0.8 ? 'text-brand-600' : 'text-amber-600'}`}>
-                  {(node.item.confidence * 100).toFixed(0)}%
+              <div>
+                <span className="text-slate-400">Status:</span>{' '}
+                <span className={`font-bold ${
+                  node.item.confidence >= 0.95 ? 'text-emerald-700' :
+                  node.item.confidence >= 0.80 ? 'text-emerald-600' :
+                  node.item.confidence >= 0.60 ? 'text-amber-600' :
+                  node.item.confidence >= 0.40 ? 'text-orange-600' : 'text-rose-600'
+                }`}>
+                  {node.item.confidence >= 0.95 ? 'Verified' :
+                   node.item.confidence >= 0.80 ? 'High Confidence' :
+                   node.item.confidence >= 0.60 ? 'Moderate Confidence' :
+                   node.item.confidence >= 0.40 ? 'Low Confidence' : 'Unverified'}
                 </span>
               </div>
               
