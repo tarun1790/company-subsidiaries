@@ -37,7 +37,7 @@ async def relationship_verification_agent(state: AgentState) -> AgentState:
             f"Claims context:\n" + "\n".join(evidence_snippets)
         )
         
-    llm = get_llm()
+    llm = get_llm(capability="verification")
     structured_llm = llm.with_structured_output(VerificationOutput)
     
     system_prompt = (
@@ -62,15 +62,28 @@ async def relationship_verification_agent(state: AgentState) -> AgentState:
             "context": "\n\n".join(candidates_context)[:25000] # Safe limit
         })
         
-        # Filter list based on confirmed flags
+        processed_names = set()
         for ver in result.verifications:
-            matching_sub = next((s for s in subs if s["name"].lower().strip() == ver.name.lower().strip()), None)
-            if matching_sub and ver.relationship_confirmed:
-                matching_sub["relationship_type"] = ver.inferred_relationship_type
-                matching_sub["notes"] = ver.explanation
+            matching_sub = next((s for s in subs if s["name"].lower().strip() == ver.name.lower().strip() or s["name"].lower().strip() in ver.name.lower().strip()), None)
+            if matching_sub:
+                processed_names.add(matching_sub["name"].lower().strip())
+                if ver.relationship_confirmed:
+                    matching_sub["verification_status"] = "Verified"
+                    if ver.inferred_relationship_type:
+                        matching_sub["relationship_type"] = ver.inferred_relationship_type
+                    matching_sub["notes"] = ver.explanation
+                else:
+                    matching_sub["verification_status"] = "Unverified"
+                    matching_sub["notes"] = f"Unconfirmed relationship: {ver.explanation}"
                 verified_subs.append(matching_sub)
                 
-        logs.append(f"Relationship Verification complete: retained {len(verified_subs)} valid entities (filtered out {len(subs) - len(verified_subs)} invalid/unconfirmed relationships).")
+        # Retain all remaining subsidiaries as Unverified so zero data is dropped!
+        for s in subs:
+            if s["name"].lower().strip() not in processed_names:
+                s["verification_status"] = "Unverified"
+                verified_subs.append(s)
+                
+        logs.append(f"Relationship Verification complete: evaluated {len(verified_subs)} entities ({len([v for v in verified_subs if v.get('verification_status') == 'Verified'])} verified).")
         return {
             **state,
             "subsidiaries": verified_subs,

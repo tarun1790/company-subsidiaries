@@ -150,7 +150,7 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
     try:
         cache_stmt = select(Company).where(Company.query_name.ilike(query.strip())).order_by(Company.created_at.desc())
         cache_res = await db.execute(cache_stmt)
-        cached_company = cache_res.scalar_one_or_none()
+        cached_company = cache_res.scalars().first()
         
         if cached_company:
             # Check if younger than 24 hours
@@ -267,7 +267,14 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
             await websocket.send_json({
                 "stage": stage,
                 "log": log_message,
-                "status": "in_progress"
+                "status": "in_progress",
+                "counts": {
+                    "subsidiaries": len(current_state.get("subsidiaries") or []),
+                    "sec_results": len(current_state.get("sec_results") or []),
+                    "website_results": len(current_state.get("website_results") or []),
+                    "search_results": len(current_state.get("search_results") or []),
+                    "discovered_documents": len(current_state.get("discovered_documents") or [])
+                }
             })
         except Exception as e:
             logger.error(f"WebSocket send error: {str(e)}")

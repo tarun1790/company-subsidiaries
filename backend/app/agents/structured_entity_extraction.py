@@ -30,7 +30,7 @@ async def structured_entity_extraction_agent(state: AgentState) -> AgentState:
         logs.append("No document text contents available for entity extraction.")
         return state
         
-    llm = get_llm()
+    llm = get_llm(capability="document_understanding")
     structured_llm = llm.with_structured_output(ExtractionOutput)
     
     system_prompt = (
@@ -48,17 +48,36 @@ async def structured_entity_extraction_agent(state: AgentState) -> AgentState:
     for url, text in document_contents.items():
         logs.append(f"Extracting entities from document content: {url}")
         try:
+            from app.services.vector_retrieval import retrieval_service
+            
+            # Retrieve top most relevant chunks containing subsidiaries
+            query = f"subsidiaries list of entities affiliate corporate structure of {legal_name}"
+            relevant_chunks = await retrieval_service.retrieve_relevant_chunks(query, top_k=8, rerank_k=4)
+            
+            if relevant_chunks:
+                logs.append(f"Retrieved {len(relevant_chunks)} high-relevance chunks from Qdrant vector database.")
+                doc_text = "\n\n".join([f"--- Chunk {c['chunk_index']} ---\n{c['text']}" for c in relevant_chunks])
+            else:
+                logs.append("No relevant chunks found in Qdrant. Falling back to head of document text.")
+                doc_text = text[:15000]
+                
             chain = prompt | structured_llm
             result = await chain.ainvoke({
                 "company": legal_name,
                 "url": url,
-                "doc_text": text[:15000] # Safe token limit
+                "doc_text": doc_text
             })
             
+            import re
+            suffixes = {"inc", "llc", "ltd", "corp", "co", "plc", "gmbh", "ag", "sa", "bv", "nv", "sarl", "as", "pvt", "private", "limited", "company"}
             for entity in result.entities:
+                name_clean = entity.name.strip()
+                name_lower = re.sub(r'[^\w\s]', '', name_clean).strip().lower()
+                if not name_clean or name_lower in suffixes or len(name_lower) < 3:
+                    continue
                 discovered.append({
-                    "name": entity.name,
-                    "legal_name": entity.name,
+                    "name": name_clean,
+                    "legal_name": name_clean,
                     "country": entity.country or "Global",
                     "ownership": entity.ownership or "Not Publicly Disclosed",
                     "parent": legal_name,

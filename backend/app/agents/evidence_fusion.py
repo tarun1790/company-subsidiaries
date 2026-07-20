@@ -39,10 +39,9 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
     logger.info(f"Evidence Fusion Agent consolidating {len(subs)} candidate items from all sources.")
     
     if not subs:
-        logs.append("No subsidiary records found to merge.")
+        logs.append("No new subsidiary records found to merge in this iteration.")
         return {
             **state,
-            "subsidiaries": [],
             "logs": logs
         }
         

@@ -23,18 +23,24 @@ async def document_discovery_agent(state: AgentState) -> AgentState:
                 discovered_docs.append(url)
                 
     # 2. Query DuckDuckGo for PDF Annual Reports & Corporate Governance files
-    try:
-        ddg = DuckDuckGoSearchRun()
-        search_query = f"{legal_name} annual report filetype:pdf"
-        logs.append("Searching corporate registries and search engines for PDF structures...")
-        search_res = ddg.run(search_query)
-        
-        urls = re.findall(r'https?://[^\s<>"]+\.pdf', search_res)
-        for url in urls:
-            if url not in discovered_docs:
-                discovered_docs.append(url)
-    except Exception as e:
-        logger.warning(f"Error searching DuckDuckGo for PDFs: {str(e)}")
+    is_root = state.get("current_iteration", 1) == 1
+    has_corporate_indicator = any(ind in legal_name.lower() for ind in ["inc", "llc", "ltd", "corp", "co", "gmbh", "ag", "holdings", "group", "limited", "company", "operating", "subsidiary", "branch"])
+    
+    if is_root or (len(legal_name) > 5 and has_corporate_indicator):
+        try:
+            ddg = DuckDuckGoSearchRun()
+            search_query = f"{legal_name} annual report filetype:pdf"
+            logs.append("Searching corporate registries and search engines for PDF structures...")
+            search_res = ddg.run(search_query)
+            
+            urls = re.findall(r'https?://[^\s<>"]+\.pdf', search_res)
+            for url in urls:
+                if url not in discovered_docs:
+                    discovered_docs.append(url)
+        except Exception as e:
+            logger.warning(f"Error searching DuckDuckGo for PDFs: {str(e)}")
+    else:
+        logs.append(f"Skipping PDF web search for generic/non-root target: '{legal_name}'")
         
     logs.append(f"Discovered {len(discovered_docs)} candidate PDF documents for analysis.")
     return {

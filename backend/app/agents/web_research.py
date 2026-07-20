@@ -112,7 +112,7 @@ async def web_research_agent(state: AgentState) -> AgentState:
     # 4. LLM Extraction
     if len(search_context.strip()) > 100:
         try:
-            llm = get_llm()
+            llm = get_llm(capability="classification")
             structured_llm = llm.with_structured_output(WebResearchOutput)
             
             system_prompt = (

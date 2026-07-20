@@ -23,20 +23,61 @@ from app.agents.knowledge_graph_builder import knowledge_graph_builder_agent
 from app.agents.corporate_hierarchy import corporate_hierarchy_agent
 from app.agents.report_agent import report_agent
 from app.agents.loop_coordinator import loop_coordinator_agent, next_target_preparer_agent, route_discovery_loop
-from app.agents.discovery_intelligence import coverage_estimator_agent, discovery_strategy_engine_agent, relationship_classification_agent, entity_verification_agent
+from app.agents.coverage_estimator import coverage_estimator_agent
+from app.agents.discovery_strategy_engine import discovery_strategy_engine_agent
+from app.agents.relationship_classification import relationship_classification_agent
+from app.agents.entity_verification import entity_verification_agent
 from app.core.logging import logger
 
 def resilient_agent_node(node_name: str, timeout: float = 30.0):
-    """Decorator to enforce individual timeouts, handle errors gracefully, and log step latency."""
+    """Decorator to enforce individual timeouts, handle errors gracefully, and log step latency and data-flow metrics."""
     def decorator(func):
         from functools import wraps
+        
+        def get_metrics_summary(s: dict) -> str:
+            parts = []
+            if "query" in s:
+                parts.append(f"query: '{s['query']}'")
+            if "company_info" in s and isinstance(s["company_info"], dict) and s["company_info"]:
+                parts.append(f"company_info: '{s['company_info'].get('legal_name')}'")
+            
+            for key in ["subsidiaries", "sec_results", "website_results", "registry_results", 
+                        "search_results", "domain_results", "discovered_documents", 
+                        "extracted_document_results", "pending_targets", "explored_entities", "errors"]:
+                if key in s and s[key] is not None:
+                    if isinstance(s[key], list):
+                        parts.append(f"{key}: {len(s[key])}")
+                        
+            for key in ["document_contents", "knowledge_graph"]:
+                if key in s and s[key] is not None:
+                    if isinstance(s[key], dict):
+                        parts.append(f"{key}: {len(s[key])}")
+            return ", ".join(parts)
+
         @wraps(func)
         async def wrapper(state: AgentState) -> AgentState:
+            # Trace inputs
+            subs_in = state.get("subsidiaries") or []
+            sec_in = state.get("sec_results") or []
+            web_in = state.get("website_results") or []
+            search_in = state.get("search_results") or []
+            doc_in = state.get("discovered_documents") or []
+            
+            logger.info(f"===> [{node_name}] INPUT ENTITIES:")
+            logger.info(f"     Subsidiaries Count: {len(subs_in)} | SEC Results: {len(sec_in)} | Website Results: {len(web_in)} | Web Search Results: {len(search_in)} | PDFs: {len(doc_in)}")
+            if subs_in:
+                logger.info(f"     Sample Input Subsidiaries (first 5): {[s.get('name') for s in subs_in[:5]]}")
+            if sec_in:
+                logger.info(f"     Sample SEC Candidates (first 5): {[s.get('name') for s in sec_in[:5]]}")
+            
+            input_summary = get_metrics_summary(state)
+            logger.info(f"[{node_name}] [INPUT] {input_summary}")
+            
             logger.info(f"Initiating node '{node_name}'...")
             start_time = time.time()
             try:
-                # Execute node with timeout
-                res = await asyncio.wait_for(func(state), timeout=timeout)
+                # Execute node with unlimited time (no timeout)
+                res = await func(state)
                 duration = time.time() - start_time
                 duration_msg = f"[Node Completed] Node '{node_name}' finished in {duration:.2f} seconds."
                 logger.info(duration_msg)
@@ -45,19 +86,31 @@ def resilient_agent_node(node_name: str, timeout: float = 30.0):
                 if not isinstance(res, dict):
                     res = {}
                 
+                output_summary = get_metrics_summary(res)
+                logger.info(f"[{node_name}] [OUTPUT] {output_summary}")
+                
+                full_next_state = {**state, **res}
+                
+                # Trace outputs
+                subs_out = full_next_state.get("subsidiaries") or []
+                sec_out = full_next_state.get("sec_results") or []
+                web_out = full_next_state.get("website_results") or []
+                search_out = full_next_state.get("search_results") or []
+                doc_out = full_next_state.get("discovered_documents") or []
+                
+                logger.info(f"<=== [{node_name}] OUTPUT ENTITIES:")
+                logger.info(f"     Subsidiaries Count: {len(subs_out)} | SEC Results: {len(sec_out)} | Website Results: {len(web_out)} | Web Search Results: {len(search_out)} | PDFs: {len(doc_out)}")
+                if subs_out:
+                    logger.info(f"     Sample Output Subsidiaries (first 5): {[s.get('name') for s in subs_out[:5]]}")
+                
+                full_summary = get_metrics_summary(full_next_state)
+                logger.info(f"[{node_name}] [STATE POST-MERGE] {full_summary}")
+                
                 # Append log message
                 if "logs" not in res:
                     res["logs"] = []
                 res["logs"].append(duration_msg)
                 return res
-            except asyncio.TimeoutError:
-                duration = time.time() - start_time
-                timeout_msg = f"[Node Timeout] Node '{node_name}' timed out after {timeout}s (total: {duration:.2f}s). Continuing with partial results."
-                logger.warning(timeout_msg)
-                return {
-                    "logs": [timeout_msg],
-                    "errors": [f"Node '{node_name}' timed out."]
-                }
             except Exception as e:
                 duration = time.time() - start_time
                 error_msg = f"[Node Error] Node '{node_name}' failed after {duration:.2f}s: {str(e)}"
@@ -74,32 +127,32 @@ def build_workflow():
     workflow = StateGraph(AgentState)
 
     # Add all agent nodes with timeouts
-    workflow.add_node("entity_resolution", resilient_agent_node("entity_resolution", timeout=60.0)(entity_resolution_agent))
-    workflow.add_node("sec_filings", resilient_agent_node("sec_filings", timeout=20.0)(sec_filings_agent))
-    workflow.add_node("official_website", resilient_agent_node("official_website", timeout=30.0)(official_website_agent))
-    workflow.add_node("public_registry", resilient_agent_node("public_registry", timeout=20.0)(public_registry_agent))
-    workflow.add_node("web_research", resilient_agent_node("web_research", timeout=20.0)(web_research_agent))
-    workflow.add_node("domain_intelligence", resilient_agent_node("domain_intelligence", timeout=15.0)(domain_intelligence_agent))
+    workflow.add_node("entity_resolution", resilient_agent_node("entity_resolution", timeout=150.0)(entity_resolution_agent))
+    workflow.add_node("sec_filings", resilient_agent_node("sec_filings", timeout=45.0)(sec_filings_agent))
+    workflow.add_node("official_website", resilient_agent_node("official_website", timeout=45.0)(official_website_agent))
+    workflow.add_node("public_registry", resilient_agent_node("public_registry", timeout=30.0)(public_registry_agent))
+    workflow.add_node("web_research", resilient_agent_node("web_research", timeout=45.0)(web_research_agent))
+    workflow.add_node("domain_intelligence", resilient_agent_node("domain_intelligence", timeout=25.0)(domain_intelligence_agent))
     
     # Split document pipeline nodes
-    workflow.add_node("document_discovery", resilient_agent_node("document_discovery", timeout=20.0)(document_discovery_agent))
-    workflow.add_node("document_intelligence", resilient_agent_node("document_intelligence", timeout=30.0)(document_intelligence_agent))
-    workflow.add_node("structured_entity_extraction", resilient_agent_node("structured_entity_extraction", timeout=20.0)(structured_entity_extraction_agent))
+    workflow.add_node("document_discovery", resilient_agent_node("document_discovery", timeout=30.0)(document_discovery_agent))
+    workflow.add_node("document_intelligence", resilient_agent_node("document_intelligence", timeout=90.0)(document_intelligence_agent))
+    workflow.add_node("structured_entity_extraction", resilient_agent_node("structured_entity_extraction", timeout=90.0)(structured_entity_extraction_agent))
     
-    workflow.add_node("evidence_fusion", resilient_agent_node("evidence_fusion", timeout=20.0)(evidence_fusion_agent))
-    workflow.add_node("entity_normalization", resilient_agent_node("entity_normalization", timeout=30.0)(entity_normalization_agent))
-    workflow.add_node("relationship_classification", resilient_agent_node("relationship_classification", timeout=20.0)(relationship_classification_agent))
-    workflow.add_node("entity_verification", resilient_agent_node("entity_verification", timeout=20.0)(entity_verification_agent))
-    workflow.add_node("conflict_resolution", resilient_agent_node("conflict_resolution", timeout=30.0)(conflict_resolution_agent))
-    workflow.add_node("relationship_verification", resilient_agent_node("relationship_verification", timeout=30.0)(relationship_verification_agent))
-    workflow.add_node("confidence_scoring", resilient_agent_node("confidence_scoring", timeout=20.0)(confidence_scoring_agent))
-    workflow.add_node("knowledge_graph_builder", resilient_agent_node("knowledge_graph_builder", timeout=20.0)(knowledge_graph_builder_agent))
-    workflow.add_node("corporate_hierarchy", resilient_agent_node("corporate_hierarchy", timeout=30.0)(corporate_hierarchy_agent))
-    workflow.add_node("report_agent", resilient_agent_node("report_agent", timeout=20.0)(report_agent))
-    workflow.add_node("coverage_estimator", resilient_agent_node("coverage_estimator", timeout=20.0)(coverage_estimator_agent))
-    workflow.add_node("discovery_strategy_engine", resilient_agent_node("discovery_strategy_engine", timeout=20.0)(discovery_strategy_engine_agent))
-    workflow.add_node("loop_coordinator", resilient_agent_node("loop_coordinator", timeout=20.0)(loop_coordinator_agent))
-    workflow.add_node("next_target_preparer", resilient_agent_node("next_target_preparer", timeout=15.0)(next_target_preparer_agent))
+    workflow.add_node("evidence_fusion", resilient_agent_node("evidence_fusion", timeout=30.0)(evidence_fusion_agent))
+    workflow.add_node("entity_normalization", resilient_agent_node("entity_normalization", timeout=45.0)(entity_normalization_agent))
+    workflow.add_node("relationship_classification", resilient_agent_node("relationship_classification", timeout=30.0)(relationship_classification_agent))
+    workflow.add_node("entity_verification", resilient_agent_node("entity_verification", timeout=30.0)(entity_verification_agent))
+    workflow.add_node("conflict_resolution", resilient_agent_node("conflict_resolution", timeout=45.0)(conflict_resolution_agent))
+    workflow.add_node("relationship_verification", resilient_agent_node("relationship_verification", timeout=45.0)(relationship_verification_agent))
+    workflow.add_node("confidence_scoring", resilient_agent_node("confidence_scoring", timeout=30.0)(confidence_scoring_agent))
+    workflow.add_node("knowledge_graph_builder", resilient_agent_node("knowledge_graph_builder", timeout=30.0)(knowledge_graph_builder_agent))
+    workflow.add_node("corporate_hierarchy", resilient_agent_node("corporate_hierarchy", timeout=45.0)(corporate_hierarchy_agent))
+    workflow.add_node("report_agent", resilient_agent_node("report_agent", timeout=30.0)(report_agent))
+    workflow.add_node("coverage_estimator", resilient_agent_node("coverage_estimator", timeout=30.0)(coverage_estimator_agent))
+    workflow.add_node("discovery_strategy_engine", resilient_agent_node("discovery_strategy_engine", timeout=30.0)(discovery_strategy_engine_agent))
+    workflow.add_node("loop_coordinator", resilient_agent_node("loop_coordinator", timeout=30.0)(loop_coordinator_agent))
+    workflow.add_node("next_target_preparer", resilient_agent_node("next_target_preparer", timeout=30.0)(next_target_preparer_agent))
 
     # Set flow sequence
     workflow.set_entry_point("entity_resolution")

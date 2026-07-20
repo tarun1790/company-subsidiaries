@@ -50,6 +50,7 @@ async def loop_coordinator_agent(state: AgentState) -> AgentState:
     # 1. Identify newly discovered entities to queue as search targets
     # (Entities that have not been explored yet)
     new_targets = []
+    suffixes = {"inc", "llc", "ltd", "corp", "co", "plc", "gmbh", "ag", "sa", "bv", "nv", "sarl", "as", "pvt", "private", "limited", "company"}
     for sub in subs:
         name = sub.get("name")
         if not name:
@@ -58,6 +59,11 @@ async def loop_coordinator_agent(state: AgentState) -> AgentState:
         
         # Avoid exploring duplicates or already explored targets
         if name_clean in explored:
+            continue
+            
+        # Safeguard: skip pure legal suffixes or very short/invalid names
+        name_lower = re.sub(r'[^\w\s]', '', name_clean).strip().lower()
+        if name_lower in suffixes or len(name_lower) < 3:
             continue
             
         # Only queue verified and high-confidence entities (confidence >= 80%) for recursive discovery

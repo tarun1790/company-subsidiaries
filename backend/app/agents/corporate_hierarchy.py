@@ -31,7 +31,7 @@ async def corporate_hierarchy_agent(state: AgentState) -> AgentState:
     sub_names = [s["name"] for s in subs]
     
     # Run LLM to resolve hierarchical connections (some subsidiaries might belong under other subsidiaries)
-    llm = get_llm()
+    llm = get_llm(capability="reasoning")
     structured_llm = llm.with_structured_output(HierarchyTree)
     
     system_prompt = (

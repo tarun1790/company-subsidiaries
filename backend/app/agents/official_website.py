@@ -48,7 +48,7 @@ async def official_website_agent(state: AgentState) -> AgentState:
         # Limit to top 3 pages to prevent context bloat and rate limits
         urls_to_scrape = urls_to_scrape[:3]
         
-        llm = get_llm()
+        llm = get_llm(capability="classification")
         structured_llm = llm.with_structured_output(ExtractedList)
         
         system_prompt = (

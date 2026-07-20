@@ -37,7 +37,7 @@ async def conflict_resolution_agent(state: AgentState) -> AgentState:
             f"Claims:\n" + "\n".join(ev_texts)
         )
         
-    llm = get_llm()
+    llm = get_llm(capability="reasoning")
     structured_llm = llm.with_structured_output(ConflictResolutionOutput)
     
     system_prompt = (

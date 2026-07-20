@@ -70,6 +70,16 @@ class WebScraper:
 
     async def get_corporate_links(self, start_url: str) -> List[str]:
         """Crawls the landing page to find key corporate pages (Investor Relations, About, Locations, etc.)."""
+        cache_key = f"links:{start_url}"
+        cached_str = await cache_manager.get(cache_key)
+        if cached_str:
+            try:
+                import json
+                logger.info(f"Retrieved cached corporate links for: {start_url}")
+                return json.loads(cached_str)
+            except Exception:
+                pass
+
         logger.info(f"Looking for corporate links on: {start_url}")
         links = []
         try:
@@ -101,6 +111,12 @@ class WebScraper:
         except Exception as e:
             logger.error(f"Error searching corporate links on {start_url}: {str(e)}")
             
+        if links:
+            try:
+                import json
+                await cache_manager.set(cache_key, json.dumps(links[:8]), expire=86400)
+            except Exception:
+                pass
         return links[:8] # return top 8 candidates
 
 scraper = WebScraper()

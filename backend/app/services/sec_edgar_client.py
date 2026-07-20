@@ -54,7 +54,13 @@ class SECEdgarClient:
             return None
 
         try:
+            def clean_name(s: str) -> str:
+                # Replace dot with space to handle ".com" -> " com"
+                s = s.replace(".", " ")
+                return re.sub(r'[^\w\s]', '', s).strip().lower()
+            
             search_str = name_or_ticker.strip().lower()
+            search_clean = clean_name(name_or_ticker)
             
             # Exact ticker match first
             for item in data.values():
@@ -65,7 +71,7 @@ class SECEdgarClient:
 
             # Fuzzy name match
             for item in data.values():
-                if search_str in item["title"].lower():
+                if search_clean in clean_name(item["title"]):
                     cik = str(item["cik_str"]).zfill(10)
                     await cache_manager.set(cache_key, cik)
                     return cik
@@ -271,8 +277,9 @@ class SECEdgarClient:
                     response = await self.client.get(url)
                     if response.status_code == 200:
                         data = response.json()
-                        sec_name = data.get("name", "").lower()
-                        words = [w for w in company_name.lower().split() if len(w) > 3]
+                        sec_name = re.sub(r'[^\w\s]', '', data.get("name", "")).strip().lower()
+                        clean_comp = re.sub(r'[^\w\s]', '', company_name).strip().lower()
+                        words = [w for w in clean_comp.split() if len(w) > 3]
                         if any(w in sec_name for w in words):
                             logger.info(f"Validated historical CIK: {candidate} for company: {data.get('name')}")
                             await cache_manager.set(cache_key, candidate, expire=86400)

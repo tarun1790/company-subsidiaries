@@ -27,7 +27,7 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
     # 1. Format the candidates payload for LLM normalizer
     candidate_names = [s["name"] for s in subs]
     
-    llm = get_llm()
+    llm = get_llm(capability="classification")
     structured_llm = llm.with_structured_output(NormalizationConsensus)
     
     system_prompt = (
@@ -52,12 +52,22 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
         })
         
         normalized_subs = []
-        # Re-map unified groups back to original list
+        import re
+        suffixes = {"inc", "llc", "ltd", "corp", "co", "plc", "gmbh", "ag", "sa", "bv", "nv", "sarl", "as", "pvt", "private", "limited", "company"}
+        processed_original_names = set()
+        
         for group in consensus.normalized_entities:
+            norm_lower = re.sub(r'[^\w\s]', '', group.normalized_name).strip().lower()
+            if norm_lower in suffixes or len(norm_lower) < 3:
+                continue
+                
             matched_items = []
             for sub in subs:
-                if sub["name"] in group.original_names or sub["name"] == group.normalized_name:
+                sub_clean = sub["name"].strip().lower()
+                orig_cleans = [o.strip().lower() for o in group.original_names]
+                if sub_clean in orig_cleans or sub_clean == group.normalized_name.strip().lower() or any(sub_clean in oc for oc in orig_cleans):
                     matched_items.append(sub)
+                    processed_original_names.add(sub_clean)
                     
             if not matched_items:
                 continue
@@ -90,7 +100,12 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
                 "notes": f"Normalized entity reconciled from variants: {', '.join(group.original_names)}."
             })
             
-        logs.append(f"Entity Normalization completed: consolidated to {len(normalized_subs)} clean corporate names.")
+        # CRITICAL FIX: Retain all un-normalized candidate entities so zero items are dropped!
+        for sub in subs:
+            if sub["name"].strip().lower() not in processed_original_names:
+                normalized_subs.append(sub)
+                
+        logs.append(f"Entity Normalization completed: consolidated/retained {len(normalized_subs)} clean corporate names (from {len(subs)} input items).")
         return {
             **state,
             "subsidiaries": normalized_subs,

@@ -131,8 +131,8 @@ def normalize_and_get_domain(url_or_name: str) -> Optional[str]:
         return s
     return s
 
-def find_domain_in_text(text: str) -> Optional[str]:
-    """Helper to robustly extract a corporate domain from search result text."""
+def find_domain_in_text(text: str, query: str = None) -> Optional[str]:
+    """Helper to robustly extract a corporate domain from search result text matching the query."""
     if not text:
         return None
     excludes = {
@@ -140,23 +140,76 @@ def find_domain_in_text(text: str) -> Optional[str]:
         "yandex.com", "yahoo.com", "startpage.com", "grokipedia.com",
         "w3.org", "sec.gov", "gleif.org", "opencorporates.com"
     }
+    valid_tlds = {
+        "com", "org", "net", "mil", "edu", "gov", "co", "io", "info", "biz", "us", "uk", "ca", "de", "jp", "fr", "au",
+        "in", "cn", "ru", "es", "it", "nl", "se", "no", "fi", "dk", "ch", "at", "be", "pl", "br", "mx", "za", "sg", "hk",
+        "tw", "kr", "my", "id", "th", "vn", "ph", "tr", "sa", "ae", "il", "gr", "pt", "ie", "nz", "cl", "ar", "coop", "mobi",
+        "travel", "museum", "jobs", "post", "asia", "cat", "tel", "xxx", "pro", "me", "tv", "cc", "fm", "am", "vc", "bz",
+        "ws", "la", "to", "ms", "tc", "vg", "gd", "cx", "tl", "sh", "ac", "io", "app", "dev", "ai", "tech", "online", "site",
+        "store", "blog", "xyz", "club", "space", "website", "ltd", "gmbh", "company", "agency", "solutions", "services",
+        "global", "world"
+    }
     
+    candidates = []
     # 1. Search for full URLs
     urls = re.findall(r'https?://(?:www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,6})', text)
     for u in urls:
         u_clean = u.lower().strip()
-        if not any(ex in u_clean for ex in excludes):
-            return u_clean
-            
-    # 2. Search for any word containing dot and valid TLD
-    candidates = re.findall(r'\b([a-zA-Z0-9-]+\.[a-zA-Z]{2,6})\b', text)
-    for c in candidates:
-        c_clean = c.lower().strip()
-        if not any(ex in c_clean for ex in excludes):
-            if not re.match(r'^[0-9\.]+$', c_clean):
-                return c_clean
+        tld = u_clean.split('.')[-1]
+        if tld in valid_tlds and not any(ex in u_clean for ex in excludes):
+            if u_clean not in candidates:
+                candidates.append(u_clean)
                 
-    return None
+    # 2. Search for any word containing dot and valid TLD
+    words = re.findall(r'\b([a-zA-Z0-9-]+\.[a-zA-Z]{2,6})\b', text)
+    for w in words:
+        w_clean = w.lower().strip()
+        tld = w_clean.split('.')[-1]
+        if tld in valid_tlds and not any(ex in w_clean for ex in excludes):
+            if not re.match(r'^[0-9\.]+$', w_clean):
+                if w_clean not in candidates:
+                    candidates.append(w_clean)
+                    
+    if not candidates:
+        if query:
+            clean_q = re.sub(r'[^\w]', '', query.lower()).strip()
+            if len(clean_q) >= 3:
+                return f"{clean_q}.com"
+        return None
+        
+    # If query is provided, score candidates by overlap with query
+    if query:
+        query_words = re.sub(r'[^\w\s]', ' ', query.lower()).split()
+        query_words = [qw for qw in query_words if len(qw) >= 3 and qw not in ["official", "corporate", "website", "domain", "address"]]
+        
+        best_candidate = None
+        best_score = -1.0
+        
+        for c in candidates:
+            score = 0.0
+            for qw in query_words:
+                if qw in c:
+                    score += 10.0
+            # Tie breaker: prefer shorter domains
+            score -= len(c) * 0.1
+            
+            if score > best_score:
+                best_score = score
+                best_candidate = c
+                
+        # If we found a candidate with at least one matching query word, return it
+        if best_score >= 5.0:
+            return best_candidate
+            
+        # Fallback: if none matched the query, default to query.com if query is sensible
+        clean_q = re.sub(r'[^\w]', '', query.lower()).strip()
+        if len(clean_q) >= 3:
+            for c in candidates:
+                if clean_q[:4] in c:
+                    return c
+            return f"{clean_q}.com"
+            
+    return candidates[0]
 
 # ============================================================================
 # Pydantic Schemas for Structured LLM Extraction & Consensus
@@ -231,7 +284,7 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
         logs.append(f"Input Intelligence: Match brand/app '{query}' -> Parent: '{parent_name}' ({parent_domain})")
     else:
         # 1.2 LLM-driven input intelligence classification
-        llm = get_llm()
+        llm = get_llm(capability="entity_resolution")
         intelligence_llm = llm.with_structured_output(InputIntelligence)
         intel_prompt = ChatPromptTemplate.from_messages([
             ("system", (
@@ -265,7 +318,7 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
                     logs.append("Searching web for official corporate domain...")
                     domain_query = f"official corporate website domain address of {query}"
                     domain_search = await asyncio.to_thread(search_tool.run, domain_query)
-                    parent_domain = find_domain_in_text(domain_search)
+                    parent_domain = find_domain_in_text(domain_search, query)
                 except Exception as se:
                     logger.debug(f"Domain search failed: {str(se)}")
 
@@ -315,7 +368,7 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
         ssl_domains = await resolver.get_cert_transparency_domains(domain)
 
     # Use LLM to extract candidates and footer information
-    llm = get_llm()
+    llm = get_llm(capability="entity_resolution")
     candidate_llm = llm.with_structured_output(CandidateExtraction)
 
     extract_prompt = ChatPromptTemplate.from_messages([
@@ -344,8 +397,11 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
             candidate_names.append(whois_org)
         if domain:
             base_name = domain.split('.')[0].capitalize()
-            if base_name not in candidate_names:
-                candidate_names.append(base_name)
+            base_clean = base_name.lower().strip()
+            suffixes = {"inc", "llc", "ltd", "corp", "co", "plc", "gmbh", "ag", "sa", "bv", "nv", "sarl", "as", "pvt", "private", "limited", "company"}
+            if base_clean not in suffixes and len(base_clean) >= 3:
+                if base_name not in candidate_names:
+                    candidate_names.append(base_name)
         if not candidate_names:
             candidate_names.append(query)
             
@@ -366,8 +422,22 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     registry_matches = []
     sec_matches = []
     
-    # Query registries
-    for name in extraction.candidate_names[:2]:
+    # Build list of names to search (parent name, original query, and scraped candidates)
+    search_names = []
+    if parent_name:
+        search_names.append(parent_name)
+    if query and query not in search_names:
+        search_names.append(query)
+    for name in extraction.candidate_names:
+        if name and name not in search_names:
+            search_names.append(name)
+            
+    # Deduplicate search names while preserving order
+    seen = set()
+    search_names = [x for x in search_names if not (x.lower() in seen or seen.add(x.lower()))]
+    
+    # Query registries for the top candidates
+    for name in search_names[:3]:
         if not name or name.lower() in ["not found", "n/a", "private", "redacted"]:
             continue
             
@@ -490,7 +560,11 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     }
 
     # Determine success or failure based on whether we have a resolved company name
-    has_resolved_entity = bool(resolved.canonical_company or resolved.legal_name)
+    resolved_name = resolved.canonical_company or resolved.legal_name or ""
+    resolved_clean = re.sub(r'[^\w\s]', '', resolved_name).strip().lower()
+    suffixes = {"inc", "llc", "ltd", "corp", "co", "plc", "gmbh", "ag", "sa", "bv", "nv", "sarl", "as", "pvt", "private", "limited", "company"}
+    
+    has_resolved_entity = bool(resolved_name) and resolved_clean not in suffixes and len(resolved_clean) >= 3
     
     if has_resolved_entity:
         company_info["status"] = "success"
