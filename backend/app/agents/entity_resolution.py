@@ -259,7 +259,12 @@ COMMON_BRANDS_FALLBACK = {
 
 async def entity_resolution_agent(state: AgentState) -> AgentState:
     """Agent 1: Resolves user search term into a verified legal entity using multi-source consensus."""
-    query = state["query"].strip()
+    raw_query = state.get("query")
+    if isinstance(raw_query, dict):
+        query = str(raw_query.get("query") or raw_query.get("company_info", {}).get("legal_name") or "").strip()
+    else:
+        query = str(raw_query or "").strip()
+        
     logs = state.get("logs", [])
     logs.append(f"Initiating Enterprise Entity Resolution for: '{query}'...")
     logger.info(f"Initiating Enterprise Entity Resolution consensus for query: {query}")
