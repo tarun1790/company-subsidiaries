@@ -9,60 +9,61 @@ inference:
 
 capabilities:
   entity_resolution:
-    primary: "qwen2.5:14b"
+    primary: "qwen3:14b"
     fallback_chain:
+      - "qwen2.5:14b"
       - "qwen2.5:7b"
       - "deepseek-r1:8b"
       - "gemma2:9b"
-      - "qwen2.5"
     cloud_fallback: "gemini-2.5-pro"
 
   document_understanding:
-    primary: "qwen2.5:14b"
+    primary: "qwen3:14b"
     fallback_chain:
+      - "qwen2.5:14b"
       - "deepseek-r1:8b"
       - "gemma2:9b"
-      - "qwen2.5"
     cloud_fallback: "gemini-2.5-pro"
 
   reasoning:
-    primary: "deepseek-r1:8b"
+    primary: "deepseek-r1:14b"
     fallback_chain:
-      - "qwen2.5:7b"
+      - "deepseek-r1:8b"
+      - "qwen2.5:14b"
       - "gemma2:9b"
-      - "qwen2.5"
     cloud_fallback: "gemini-2.5-pro"
 
   classification:
-    primary: "gemma2:9b"
+    primary: "gemma3:12b"
     fallback_chain:
+      - "gemma2:9b"
+      - "qwen2.5:14b"
       - "qwen2.5:7b"
-      - "qwen2.5"
     cloud_fallback: "gemini-2.5-flash"
 
   json_generation:
-    primary: "qwen2.5:14b"
+    primary: "qwen3:14b"
     fallback_chain:
+      - "qwen2.5:14b"
       - "gemma2:9b"
-      - "qwen2.5"
     cloud_fallback: "gemini-2.5-flash"
 
   code_generation:
-    primary: "qwen2.5:14b"
+    primary: "qwen3:14b"
     fallback_chain:
-      - "qwen2.5"
+      - "qwen2.5:14b"
     cloud_fallback: "gemini-2.5-flash"
 
   verification:
-    primary: "deepseek-r1:8b"
+    primary: "deepseek-r1:14b"
     fallback_chain:
-      - "qwen2.5:7b"
-      - "qwen2.5"
+      - "deepseek-r1:8b"
+      - "qwen2.5:14b"
     cloud_fallback: "gemini-2.5-pro"
 
   general:
-    primary: "qwen2.5:14b"
+    primary: "qwen3:14b"
     fallback_chain:
+      - "qwen2.5:14b"
       - "gemma2:9b"
-      - "qwen2.5"
     cloud_fallback: "gemini-2.5-flash"
