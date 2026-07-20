@@ -29,6 +29,12 @@ export interface Subsidiary {
   relationship_type?: string;
   registration_number?: string;
   confidence: number;
+  confidence_band?: string;
+  verification_status?: string;
+  reduced_confidence_reason?: string;
+  source_count?: number;
+  valid_from?: string;
+  valid_to?: string;
   notes?: string;
   depth?: number;
   evidences: Evidence[];
