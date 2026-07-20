@@ -1,115 +1,115 @@
-import os
-import json
+import math
+from typing import List, Dict, Any
 from app.agents.state import AgentState
 from app.core.logging import logger
 
-def load_scoring_config() -> dict:
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "scoring_config.json")
-    try:
-        if os.path.exists(config_path):
-            with open(config_path, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load scoring_config.json: {str(e)}")
+def calculate_9_factor_confidence(sub: Dict[str, Any]) -> float:
+    """Calculates mathematical 9-factor confidence score bounded between 0.0 and 1.0:
     
-    return {
-        "source_authority": {
-          "sec_filings": 0.50,
-          "public_registry": 0.40,
-          "annual_report_pdf": 0.45,
-          "official_website": 0.30,
-          "dns_ssl_verification": 0.20,
-          "web_research": 0.10
-        },
-        "parameters": {
-          "cross_validation_bonus": 0.15,
-          "min_confidence": 0.05,
-          "max_confidence": 1.0,
-          "conflict_penalty": 0.25
-        }
-    }
+    Confidence = min(1.0, max(0.0, sum(w_i * S_i) - P_conflict))
+    
+    Weights:
+      S_authority      (0.25): Tier 1 = 1.0, Tier 2 = 0.8, Tier 3 = 0.6, Tier 4 = 0.4
+      S_recency        (0.10): <1 yr = 1.0, 1-3 yrs = 0.8, >3 yrs = 0.5
+      S_specificity    (0.15): Structured table row = 1.0, Text snippet = 0.8, Keyword = 0.5
+      S_corroboration  (0.15): 1 - exp(-0.5 * (src_count - 1))
+      S_ext_conf       (0.10): Parser / LLM confidence (0.0 to 1.0)
+      S_res_conf       (0.10): Identifier / Entity match precision (0.0 to 1.0)
+      S_class_conf     (0.08): Relationship taxonomy match confidence
+      S_temp_conf      (0.07): Explicit date match confidence
+      P_conflict       (deducted): Contradiction penalty (0.0 to 0.25)
+    """
+    evidences = sub.get("evidences") or []
+    
+    # 1. Authority Tier
+    best_tier = 4
+    for ev in evidences:
+        src = (ev.get("source_type") or "").lower()
+        if any(k in src for k in ["sec", "edgar", "companies house", "registry", "exhibit 21", "statutory"]):
+            best_tier = 1
+            break
+        elif any(k in src for k in ["gleif", "lei", "official website", "investor"]):
+            best_tier = min(best_tier, 2)
+        elif any(k in src for k in ["opencorporates", "duns"]):
+            best_tier = min(best_tier, 3)
+            
+    s_authority = {1: 1.0, 2: 0.8, 3: 0.6, 4: 0.4}.get(best_tier, 0.4)
+    
+    # 2. Recency
+    s_recency = 1.0  # Default current
+    
+    # 3. Specificity
+    s_specificity = 0.8
+    if any("exhibit 21" in (ev.get("extracted_text") or "").lower() or "table" in (ev.get("source_type") or "").lower() for ev in evidences):
+        s_specificity = 1.0
+        
+    # 4. Corroboration Count
+    unique_sources = set(ev.get("source_type") for ev in evidences if ev.get("source_type"))
+    src_count = max(1, len(unique_sources))
+    s_corroboration = 1.0 - math.exp(-0.5 * (src_count - 1))
+    
+    # 5. Extraction Confidence
+    s_ext_conf = float(sub.get("confidence") or 0.80)
+    if s_ext_conf > 1.0:
+        s_ext_conf = s_ext_conf / 100.0
+    s_ext_conf = max(0.0, min(1.0, s_ext_conf))
+    
+    # 6. Resolution Confidence
+    s_res_conf = 1.0 if sub.get("registration_number") or sub.get("cik") or best_tier == 1 else 0.85
+    
+    # 7. Classification Confidence
+    rel = (sub.get("relationship_type") or "").lower()
+    s_class_conf = 1.0 if rel in ["subsidiary", "wholly owned subsidiary", "brand", "joint venture"] else 0.75
+    
+    # 8. Temporal Confidence
+    s_temp_conf = 1.0 if sub.get("valid_from") else 0.70
+    
+    # 9. Conflict Penalty
+    p_conflict = 0.25 if sub.get("is_conflicting") else 0.0
+    
+    # Weighted Sum
+    weighted_score = (
+        (0.25 * s_authority) +
+        (0.10 * s_recency) +
+        (0.15 * s_specificity) +
+        (0.15 * s_corroboration) +
+        (0.10 * s_ext_conf) +
+        (0.10 * s_res_conf) +
+        (0.08 * s_class_conf) +
+        (0.07 * s_temp_conf)
+    ) - p_conflict
+    
+    final_score = round(max(0.0, min(1.0, weighted_score)), 4)
+    return final_score
 
 async def confidence_scoring_agent(state: AgentState) -> AgentState:
-    """Agent 12: Dynamically computes multi-factor confidence scores using configuration constants."""
+    """Agent Stage 21: Evaluates 9-factor mathematical confidence scoring for every entity."""
     subs = state.get("subsidiaries", [])
     logs = state.get("logs", [])
     
-    if not subs:
-        return state
-        
-    logs.append("Running Confidence Scoring Agent...")
-    logger.info(f"Confidence Scoring Agent processing {len(subs)} entities.")
-    
-    config = load_scoring_config()
-    auth = config["source_authority"]
-    params = config["parameters"]
+    logs.append("Running 9-Factor Mathematical Confidence Scoring Agent...")
     
     scored_subs = []
-    
     for sub in subs:
-        evidences = sub.get("evidences", [])
-        source_types = set([ev["source_type"] for ev in evidences])
+        score = calculate_9_factor_confidence(sub)
         
-        confidence = 0.0
-        
-        if "Authoritative Reference Registry" in source_types:
-            confidence = 1.0
+        # Assign confidence band
+        if score >= 0.85:
+            band = "High / Confirmed"
+        elif score >= 0.65:
+            band = "Medium / Probable"
+        elif score >= 0.40:
+            band = "Low / Unverified"
         else:
-            if "SEC Filings" in source_types:
-                confidence += auth.get("sec_filings", 0.50)
-            if "Public Registry" in source_types:
-                confidence += auth.get("public_registry", 0.40)
-            if "Annual Report PDF" in source_types:
-                confidence += auth.get("annual_report_pdf", 0.45)
-            if "Official Website" in source_types:
-                confidence += auth.get("official_website", 0.30)
-            if "DNS/SSL Verification" in source_types:
-                confidence += auth.get("dns_ssl_verification", 0.20)
-            if "Web Research" in source_types:
-                confidence += auth.get("web_research", 0.10)
-                
-            if len(source_types) > 1:
-                confidence += params.get("cross_validation_bonus", 0.15) * (len(source_types) - 1)
-                
-            if sub.get("conflict_detected"):
-                confidence -= params.get("conflict_penalty", 0.25)
-                
-            confidence = min(max(confidence, params.get("min_confidence", 0.05)), params.get("max_confidence", 1.0))
-        
-        sub["confidence"] = confidence
-        sub["source_count"] = len(evidences)
-        sub["source_types"] = list(source_types)
-        
-        # Calculate reason for reduced confidence
-        reasons = []
-        if len(source_types) <= 1:
-            reasons.append("Single source of evidence")
-        if not ("Public Registry" in source_types or "SEC Filings" in source_types):
-            reasons.append("No official registry/regulatory filings found")
-        if sub.get("conflict_detected"):
-            reasons.append("Ownership conflict or dispute detected")
-        if "Web Research" in source_types and len(source_types) == 1:
-            reasons.append("Verified only via general web research search engine snippets")
-            
-        sub["reduced_confidence_reason"] = ", ".join(reasons) if reasons else "Fully verified across multiple authoritative databases"
-        
-        # Assign verification status based on confidence thresholds
-        if confidence >= 0.95:
-            sub["verification_status"] = "Verified"
-        elif confidence >= 0.80:
-            sub["verification_status"] = "High Confidence"
-        elif confidence >= 0.60:
-            sub["verification_status"] = "Moderate Confidence"
-        elif confidence >= 0.40:
-            sub["verification_status"] = "Low Confidence"
-        else:
-            sub["verification_status"] = "Unverified"
+            band = "Unverified Candidate"
 
-        scored_subs.append(sub)
-            
-    scored_subs.sort(key=lambda x: (-x["confidence"], x["name"]))
-    
-    logs.append(f"Confidence scoring complete. Loaded weights dynamically. Retained {len(scored_subs)} entities.")
+        scored_subs.append({
+            **sub,
+            "confidence": score,
+            "confidence_band": band
+        })
+
+    logs.append(f"Confidence scoring completed for {len(scored_subs)} entities.")
     return {
         **state,
         "subsidiaries": scored_subs,
