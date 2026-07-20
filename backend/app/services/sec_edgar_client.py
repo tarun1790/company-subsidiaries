@@ -124,52 +124,83 @@ class SECEdgarClient:
             return []
 
     async def get_exhibit_21(self, cik: str, accession_number: str) -> Optional[str]:
-        """Attempts to find and retrieve Exhibit 21 (List of Subsidiaries) for a filing."""
+        """Finds and retrieves Exhibit 21 (List of Subsidiaries) using the SEC filing index JSON.
+        
+        Uses the structured filing index JSON as the primary method — this carries a 'type' field
+        (e.g. 'EX-21.1') so it works for any company naming convention (e.g. Cognizant's
+        ctshexhibit21112312025.htm vs Apple's ex21.htm vs Amazon's exhibit21-1.htm).
+        Falls back to directory link scanning for older filings not in the index.
+        """
         clean_acc = accession_number.replace("-", "")
-        # Step 1: Fetch directory listing for this filing
-        url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/"
         cache_key = f"ex21_content:{cik}:{accession_number}"
         cached = await cache_manager.get(cache_key)
         if cached:
             return cached
 
-        try:
-            response = await self.client.get(url)
-            if response.status_code != 200:
-                return None
-            
-            soup = BeautifulSoup(response.text, "html.parser")
-            ex21_link = None
-            
-            # Find links ending with ex21, ex-21, or containing exhibit 21
-            for link in soup.find_all("a", href=True):
-                href = link["href"]
-                text = link.get_text().lower()
-                href_lower = href.lower()
-                
-                # Check patterns like ex21.htm, ex-21.htm, ex_21.htm, ex21_1.htm, etc.
-                if re.search(r"ex[-_]?21[a-z0-9_-]*\.(htm|txt)", href_lower) or "exhibit 21" in text or "ex-21" in text:
-                    ex21_link = href
-                    break
-            
-            if ex21_link:
-                # Resolve full URL
-                if not ex21_link.startswith("http"):
-                    # Relative to standard archives path
-                    ex21_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/{ex21_link.split('/')[-1]}"
-                else:
-                    ex21_url = ex21_link
+        ex21_filename = None
 
-                logger.info(f"Found Exhibit 21 URL: {ex21_url}")
-                doc_response = await self.client.get(ex21_url)
-                if doc_response.status_code == 200:
-                    content = doc_response.text
-                    await cache_manager.set(cache_key, content, expire=86400)
-                    return content
-                    
+        # Primary: SEC filing index JSON has typed document list — reliable for ALL companies
+        try:
+            idx_json_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/{accession_number}-index.json"
+            idx_response = await self.client.get(idx_json_url)
+            if idx_response.status_code == 200:
+                idx_data = idx_response.json()
+                for doc in idx_data.get("directory", {}).get("item", []):
+                    doc_type = (doc.get("type") or "").upper().replace(" ", "")
+                    if doc_type in ("EX-21", "EX-21.1", "EX-21.2", "EXHIBIT21", "EX21"):
+                        ex21_filename = doc.get("name")
+                        logger.info(f"Found Exhibit 21 via index JSON: {ex21_filename} (type={doc_type})")
+                        break
         except Exception as e:
-            logger.error(f"Error fetching Exhibit 21 for CIK {cik}, Acc {accession_number}: {str(e)}")
-            
+            logger.debug(f"Could not fetch filing index JSON for {accession_number}: {str(e)}")
+
+        # Fallback: Parse the directory listing HTML with expanded regex patterns
+        if not ex21_filename:
+            try:
+                dir_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/"
+                response = await self.client.get(dir_url)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    for link in soup.find_all("a", href=True):
+                        href = link["href"]
+                        text = link.get_text().lower()
+                        href_lower = href.lower()
+                        href_basename = href_lower.split("/")[-1]
+                        # Match standard patterns: ex21.htm, ex-21.htm, ex_21.htm
+                        if re.search(r"ex[-_]?21[a-z0-9._-]*\.(htm|txt)", href_basename):
+                            ex21_filename = href_basename
+                            logger.info(f"Found Exhibit 21 via directory scan (standard pattern): {ex21_filename}")
+                            break
+                        # Match branded patterns: ctshexhibit21*.htm, exhibit21*.htm, *ex21*.htm
+                        if re.search(r"exhibit21[a-z0-9._-]*\.(htm|txt)", href_basename):
+                            ex21_filename = href_basename
+                            logger.info(f"Found Exhibit 21 via directory scan (branded pattern): {ex21_filename}")
+                            break
+                        # Match text link labels
+                        if "exhibit 21" in text or "ex-21" in text or "ex 21" in text:
+                            ex21_filename = href.split("/")[-1]
+                            logger.info(f"Found Exhibit 21 via link text match: {ex21_filename}")
+                            break
+            except Exception as e:
+                logger.error(f"Error scanning directory for Exhibit 21 (CIK {cik}, Acc {accession_number}): {str(e)}")
+
+        if not ex21_filename:
+            logger.warning(f"Exhibit 21 not found for 10-K accession: {accession_number}")
+            return None
+
+        try:
+            ex21_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/{ex21_filename}"
+            logger.info(f"Fetching Exhibit 21 content from: {ex21_url}")
+            doc_response = await self.client.get(ex21_url)
+            if doc_response.status_code == 200:
+                content = doc_response.text
+                await cache_manager.set(cache_key, content, expire=86400)
+                return content
+            else:
+                logger.error(f"Failed to download Exhibit 21 {ex21_url}: HTTP {doc_response.status_code}")
+        except Exception as e:
+            logger.error(f"Error fetching Exhibit 21 content for CIK {cik}, Acc {accession_number}: {str(e)}")
+
         return None
 
     def parse_exhibit_21_html(self, html_content: str) -> List[Dict[str, Any]]:
