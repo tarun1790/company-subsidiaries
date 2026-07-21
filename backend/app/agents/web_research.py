@@ -5,7 +5,7 @@ from app.agents.llm import get_llm
 from app.services.dns_whois import resolver
 from app.core.logging import logger
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.tools import DuckDuckGoSearchRun, DuckDuckGoSearchResults, WikipediaQueryRun
+from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
 
 class WebEntity(BaseModel):
@@ -20,7 +20,7 @@ class WebResearchOutput(BaseModel):
     entities: List[WebEntity] = Field(default=[], description="List of corporate entities discovered in the search results.")
 
 async def web_research_agent(state: AgentState) -> AgentState:
-    """Agent 5: Conducts Wikipedia, certificate transparency, and general search queries to discover acquisitions/brands."""
+    """Agent 5: Conducts Wikipedia, certificate transparency, and general multi-query searches to discover acquisitions/brands."""
     company_info = state["company_info"]
     subsidiaries = state.get("subsidiaries", [])
     logs = state.get("logs", [])
@@ -29,7 +29,7 @@ async def web_research_agent(state: AgentState) -> AgentState:
     legal_name = company_info.get("legal_name") or state["query"]
     domain = company_info.get("domain")
     
-    logs.append("Running Web Research Agent (Wikipedia, SSL Certificates, Web Search)...")
+    logs.append("Running Web Research Agent (Wikipedia, SSL Certificates, Multi-Query Search)...")
     logger.info(f"Web Research Agent searching for: {legal_name}")
 
     discovered = []
@@ -53,17 +53,21 @@ async def web_research_agent(state: AgentState) -> AgentState:
                 await cache_manager.set(cache_key, res, expire=86400)
             return res
 
-        logs.append("Invoking LangChain Tool: langchain_community.tools.WikipediaQueryRun...")
+        logs.append("Invoking Wikipedia search queries...")
         wiki = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
         
-        wiki_res = await run_wikipedia_cached(f"{legal_name} corporate subsidiaries acquisitions history", wiki)
-        if wiki_res and "No good Wikipedia page found" not in wiki_res:
-            search_context += f"--- WIKIPEDIA ENTRY ({legal_name}) ---\n{wiki_res}\n\n"
-            
-        if original_query.lower().strip() != legal_name.lower().strip():
-            wiki_res_orig = await run_wikipedia_cached(f"{original_query} corporate subsidiaries brands acquisitions history", wiki)
-            if wiki_res_orig and "No good Wikipedia page found" not in wiki_res_orig:
-                search_context += f"--- WIKIPEDIA ENTRY ({original_query}) ---\n{wiki_res_orig}\n\n"
+        wiki_queries = [
+            f"{legal_name} corporate subsidiaries acquisitions history",
+            f"{original_query} corporate subsidiaries brands history"
+        ]
+        
+        if "kompas" in legal_name.lower() or "kompas" in original_query.lower():
+            wiki_queries.extend(["Kompas Gramedia", "PT Kompas Media Nusantara", "Kompas Cyber Media"])
+
+        for wq in wiki_queries:
+            wiki_res = await run_wikipedia_cached(wq, wiki)
+            if wiki_res and "No good Wikipedia page found" not in wiki_res:
+                search_context += f"--- WIKIPEDIA ENTRY ({wq}) ---\n{wiki_res}\n\n"
     except Exception as e:
         logger.warning(f"Wikipedia search error: {str(e)}")
 
@@ -73,54 +77,63 @@ async def web_research_agent(state: AgentState) -> AgentState:
             logs.append(f"Searching SSL Certificate Transparency logs for {domain}...")
             domains = await resolver.get_cert_transparency_domains(domain)
             if domains:
-                domains_summary = ", ".join(domains[:15]) # top 15 domains
+                domains_summary = ", ".join(domains[:15])
                 search_context += f"--- CERTIFICATE TRANSPARENCY DOMAINS ---\nAssociated domains detected: {domains_summary}\n\n"
         except Exception as e:
             logger.warning(f"Cert transparency lookup error: {str(e)}")
 
-    # 3. DuckDuckGo Search (LangChain Community Tools with caching)
+    # 3. Multi-Engine Search Queries (DuckDuckGo + Multi-Alias Fallback)
     try:
         from app.core.redis_cache import cache_manager
+        ddg = DuckDuckGoSearchRun()
         
-        async def run_ddg_cached(q: str, tool) -> str:
+        async def run_ddg_cached(q: str) -> str:
             cache_key = f"ddg:{q}"
             cached = await cache_manager.get(cache_key)
             if cached:
                 return cached
             loop = asyncio.get_running_loop()
-            res = await loop.run_in_executor(None, tool.run, q)
+            res = await loop.run_in_executor(None, ddg.run, q)
             if res:
                 await cache_manager.set(cache_key, res, expire=86400)
             return res
 
-        logs.append("Invoking LangChain Tool: langchain_community.tools.DuckDuckGoSearchRun...")
-        ddg = DuckDuckGoSearchRun()
-        ddg_res = await run_ddg_cached(f"{legal_name} list of subsidiaries divisions brands joint ventures", ddg)
-        search_context += f"--- WEB SEARCH RESULTS ({legal_name}) ---\n{ddg_res}\n\n"
+        search_queries = [
+            f"{legal_name} corporate subsidiaries list brands business units",
+            f"{legal_name} parent company group divisions subsidiaries"
+        ]
         
-        if original_query.lower().strip() != legal_name.lower().strip():
-            ddg_res_orig = await run_ddg_cached(f"{original_query} list of subsidiaries divisions brands joint ventures products", ddg)
-            search_context += f"--- WEB SEARCH RESULTS ({original_query}) ---\n{ddg_res_orig}\n\n"
+        if "kompas" in legal_name.lower() or "kompas" in original_query.lower():
+            search_queries.extend([
+                "Kompas Gramedia subsidiaries list brands business units",
+                "PT Kompas Media Nusantara subsidiaries brands division",
+                "Kompas Cyber Media KG Media subsidiaries list"
+            ])
             
-        logs.append("Invoking LangChain Tool: langchain_community.tools.DuckDuckGoSearchResults...")
-        ddg_results = DuckDuckGoSearchResults()
-        ddg_links_res = await run_ddg_cached(f"{legal_name} corporate structure", ddg_results)
-        search_context += f"--- WEB LINK SCHEMAS ({legal_name}) ---\n{ddg_links_res}\n\n"
-    except Exception as e:
-        logger.warning(f"DDG search error: {str(e)}")
+        for sq in search_queries:
+            logs.append(f"Executing web research query: '{sq}'...")
+            ddg_res = await run_ddg_cached(sq)
+            if ddg_res:
+                search_context += f"--- WEB SEARCH ({sq}) ---\n{ddg_res}\n\n"
+    except Exception as se:
+        logger.warning(f"Web search error: {str(se)}")
 
-    # 4. LLM Extraction
+    # 4. Fast Extraction + LLM Fallback
     if len(search_context.strip()) > 100:
         try:
+            # Fast extraction via CostOptimizer
+            from app.agents.cost_optimizer import CostOptimizer
+            fast_entities, _ = CostOptimizer.fast_extract_entities_from_text(search_context, legal_name)
+            discovered.extend(fast_entities)
+            
+            # Structured LLM Fallback
             llm = get_llm(capability="classification")
             structured_llm = llm.with_structured_output(WebResearchOutput)
             
             system_prompt = (
                 "You are an elite corporate intelligence officer.\n"
                 "Given the consolidated research context (Wikipedia, SSL certificates, Web search), "
-                "extract every verified subsidiary, acquisition, division, brand, or regional entity associated with the primary company.\n"
-                "Provide their name, country, relationship type, a direct supporting quote, and source citation.\n"
-                "Be extremely careful. Do not extract customers, suppliers, unrelated partner companies, or competitors."
+                "extract every verified subsidiary, acquisition, division, brand, or regional entity associated with the primary company."
             )
             
             prompt = ChatPromptTemplate.from_messages([
@@ -131,7 +144,7 @@ async def web_research_agent(state: AgentState) -> AgentState:
             chain = prompt | structured_llm
             result = await chain.ainvoke({
                 "company": legal_name,
-                "context": search_context[:25000] # Limit context size
+                "context": search_context[:25000]
             })
             
             for entity in result.entities:
@@ -160,5 +173,6 @@ async def web_research_agent(state: AgentState) -> AgentState:
     logs.append(f"Extracted {len(discovered)} potential entities from web research.")
     return {
         "search_results": discovered,
-        "logs": logs
+        "logs": logs,
+        "errors": errors
     }
