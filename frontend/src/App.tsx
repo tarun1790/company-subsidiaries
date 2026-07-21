@@ -90,13 +90,29 @@ export const App: React.FC = () => {
       });
     };
 
-    const handleError = (err: any) => {
-      console.error("WS Pipeline error: ", err);
+    const handleError = async (err: any) => {
+      console.warn("WS Pipeline notice/error, switching to HTTP audit runner fallback: ", err);
       setPipelineState((prev) => ({
         ...prev,
-        stageLogs: [...prev.stageLogs, "WebSocket connection error: connection closed unexpectedly."],
-        status: 'failed'
+        stageLogs: [...prev.stageLogs, "WebSocket closed. Executing synchronous HTTP pipeline fallback..."]
       }));
+      try {
+        const details = await api.runPipelineHTTP(query);
+        setPipelineState({
+          query: details.company.legal_name || query,
+          stageLogs: ["HTTP pipeline audit completed successfully."],
+          currentStage: "done",
+          status: 'complete',
+          results: details
+        });
+      } catch (httpErr: any) {
+        console.error("HTTP Pipeline fallback failed: ", httpErr);
+        setPipelineState((prev) => ({
+          ...prev,
+          stageLogs: [...prev.stageLogs, `Audit execution failed: ${httpErr.message}`],
+          status: 'failed'
+        }));
+      }
     };
 
     const handleClose = () => {

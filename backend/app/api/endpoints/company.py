@@ -445,3 +445,102 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
             await websocket.close()
         except Exception:
             pass
+
+@router.post("/pipeline/{query}")
+async def run_pipeline_http(query: str, db: AsyncSession = Depends(get_db)):
+    """Executes full pipeline audit via HTTP POST, returning details JSON payload."""
+    try:
+        initial_state = {
+            "query": query,
+            "company_info": {},
+            "subsidiaries": [],
+            "sec_results": [],
+            "website_results": [],
+            "registry_results": [],
+            "search_results": [],
+            "domain_results": [],
+            "discovered_documents": [],
+            "extracted_document_results": [],
+            "document_contents": {},
+            "knowledge_graph": {},
+            "pending_targets": [],
+            "explored_entities": [],
+            "logs": [],
+            "errors": []
+        }
+        
+        final_state = await execute_pipeline(initial_state)
+        comp_info = final_state.get("company_info", {})
+        subs = final_state.get("subsidiaries", [])
+        
+        # Save to database
+        db_company = Company(
+            query_name=query,
+            legal_name=comp_info.get("legal_name") or query,
+            domain=comp_info.get("official_domain") or comp_info.get("domain"),
+            cik=comp_info.get("cik"),
+            ticker=comp_info.get("ticker"),
+            hq_country=comp_info.get("country") or comp_info.get("hq_country") or "Global",
+            metadata_fields=comp_info
+        )
+        db.add(db_company)
+        await db.flush()
+        
+        for sub in subs:
+            db_sub = Subsidiary(
+                company_id=db_company.id,
+                name=sub["name"],
+                country=sub.get("country"),
+                ownership=sub.get("ownership"),
+                parent=sub.get("parent"),
+                relationship_type=sub.get("relationship_type"),
+                registration_number=sub.get("registration_number"),
+                confidence=sub.get("confidence", 0.85),
+                notes=sub.get("notes")
+            )
+            db.add(db_sub)
+            await db.flush()
+            
+            for ev in sub.get("evidences", []):
+                db_ev = Evidence(
+                    subsidiary_id=db_sub.id,
+                    source_type=ev.get("source_type", "Web Research"),
+                    source_url=ev.get("source_url"),
+                    extracted_text=ev.get("extracted_text")
+                )
+                db.add(db_ev)
+
+        db_report = Report(
+            company_id=db_company.id,
+            pdf_path=final_state.get("pdf_path"),
+            excel_path=final_state.get("excel_path"),
+            csv_path=final_state.get("csv_path"),
+            json_path=final_state.get("json_path")
+        )
+        db.add(db_report)
+        await db.commit()
+        
+        return {
+            "company": {
+                "id": str(db_company.id),
+                "query_name": query,
+                "legal_name": db_company.legal_name,
+                "domain": db_company.domain,
+                "cik": db_company.cik,
+                "ticker": db_company.ticker,
+                "hq_country": db_company.hq_country,
+                "created_at": db_company.created_at.isoformat() if db_company.created_at else None,
+                "metadata_fields": comp_info
+            },
+            "subsidiaries": subs,
+            "reports": {
+                "pdf": f"/api/reports/download/{db_report.pdf_path}" if db_report.pdf_path else None,
+                "excel": f"/api/reports/download/{db_report.excel_path}" if db_report.excel_path else None,
+                "csv": f"/api/reports/download/{db_report.csv_path}" if db_report.csv_path else None,
+                "json": f"/api/reports/download/{db_report.json_path}" if db_report.json_path else None,
+            }
+        }
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"HTTP pipeline execution failed for '{query}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Pipeline execution failed: {str(e)}")

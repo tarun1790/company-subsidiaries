@@ -98,7 +98,12 @@ const isGithubPages = () => {
 const getBackendUrl = () => {
   const saved = localStorage.getItem('backend_url');
   if (saved) return saved;
-  return isGithubPages() ? 'http://localhost:8000' : '';
+  // Always default to http://localhost:8000 for local development or GitHub Pages
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (isLocal || isGithubPages()) {
+    return 'http://localhost:8000';
+  }
+  return '';
 };
 
 export const api = {
@@ -146,6 +151,21 @@ export const api = {
       return await res.json();
     } catch (e) {
       console.error(`[api-service] Failed to fetch company details for ID ${id}:`, e);
+      throw e;
+    }
+  },
+
+  async runPipelineHTTP(query: string): Promise<CompanyDetails> {
+    try {
+      const base = getBackendUrl();
+      const res = await fetch(`${base}/api/companies/pipeline/${encodeURIComponent(query)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) throw new Error('HTTP pipeline execution failed');
+      return await res.json();
+    } catch (e) {
+      console.error(`[api-service] Failed HTTP pipeline run for query ${query}:`, e);
       throw e;
     }
   },
