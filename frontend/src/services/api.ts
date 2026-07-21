@@ -114,6 +114,30 @@ export const api = {
     }
   },
 
+  async clearAllHistory(): Promise<{ message: string }> {
+    try {
+      const base = getBackendUrl();
+      const res = await fetch(`${base}/api/companies/history/clear`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to clear audit history');
+      return await res.json();
+    } catch (e) {
+      console.error("[api-service] Failed to clear audit history:", e);
+      throw e;
+    }
+  },
+
+  async deleteCompanyAudit(id: string): Promise<{ message: string }> {
+    try {
+      const base = getBackendUrl();
+      const res = await fetch(`${base}/api/companies/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete company audit');
+      return await res.json();
+    } catch (e) {
+      console.error(`[api-service] Failed to delete company audit for ID ${id}:`, e);
+      throw e;
+    }
+  },
+
   async getCompanyDetails(id: string): Promise<CompanyDetails> {
     try {
       const base = getBackendUrl();

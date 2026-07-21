@@ -32,6 +32,62 @@ async def get_search_history(db: AsyncSession = Depends(get_db)):
         logger.error(f"Error fetching history: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error fetching history.")
 
+@router.delete("/history/clear")
+async def clear_all_history(db: AsyncSession = Depends(get_db)):
+    """Deletes all corporate audit history, evidence records, reports, and clears cache."""
+    try:
+        from sqlalchemy import delete
+        from app.core.redis_cache import cache_manager
+        
+        # 1. Delete reports, evidences, subsidiaries, companies from DB
+        await db.execute(delete(Report))
+        await db.execute(delete(Evidence))
+        await db.execute(delete(Subsidiary))
+        await db.execute(delete(Company))
+        await db.commit()
+        
+        # 2. Clear in-memory cache
+        cache_manager._fallback_db.clear()
+        if cache_manager.redis_client:
+            try:
+                await cache_manager.redis_client.flushdb()
+            except Exception as re:
+                logger.warning(f"Redis flushdb warning: {str(re)}")
+                
+        logger.info("All audit history and caches cleared successfully.")
+        return {"message": "All corporate audit history cleared successfully."}
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error clearing audit history: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear history: {str(e)}")
+
+@router.delete("/{company_id}")
+async def delete_company_audit(company_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Deletes a specific company's audit records so re-running starts from scratch."""
+    try:
+        from sqlalchemy import delete
+        
+        # Delete related reports, evidences, subsidiaries, company
+        await db.execute(delete(Report).where(Report.company_id == company_id))
+        
+        # Delete evidences linked to company's subsidiaries
+        sub_stmt = select(Subsidiary.id).where(Subsidiary.company_id == company_id)
+        sub_res = await db.execute(sub_stmt)
+        sub_ids = sub_res.scalars().all()
+        if sub_ids:
+            await db.execute(delete(Evidence).where(Evidence.subsidiary_id.in_(sub_ids)))
+            
+        await db.execute(delete(Subsidiary).where(Subsidiary.company_id == company_id))
+        await db.execute(delete(Company).where(Company.id == company_id))
+        await db.commit()
+        
+        logger.info(f"Deleted audit record for company ID: {company_id}")
+        return {"message": f"Audit record for company ID {company_id} deleted."}
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error deleting company audit: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete company audit: {str(e)}")
+
 @router.get("/{company_id}", response_model=Dict[str, Any])
 async def get_company_details(company_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Retrieves full details of a researched company including subsidiaries, evidence, and reports."""
