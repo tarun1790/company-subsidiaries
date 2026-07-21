@@ -1,5 +1,6 @@
+import re
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from app.agents.state import AgentState
 from app.agents.llm import get_llm
 from app.core.logging import logger
@@ -16,51 +17,79 @@ class ExtractionOutput(BaseModel):
     entities: List[ExtractedSubsidiary] = Field(default=[], description="List of corporate entities discovered in the text.")
 
 async def structured_entity_extraction_agent(state: AgentState) -> AgentState:
-    """Agent 8: Uses structured LLM parsing to extract candidate entities from parsed text blocks."""
+    """Agent 8: Structured Entity Extraction node mapping chunks/SEC entries to raw claims."""
     document_contents = state.get("document_contents", {})
+    document_chunks = state.get("document_chunks", [])
+    sec_results = state.get("sec_results", [])
     logs = state.get("logs", [])
+    warnings = state.get("warnings", [])
     legal_name = state["company_info"].get("legal_name") or state["query"]
     
     logs.append("Running Structured Entity Extraction Agent...")
     logger.info(f"Structured Entity Extraction Agent parsing document contents for: {legal_name}")
     
+    raw_claims = []
     discovered = []
     
-    if not document_contents:
-        logs.append("No document text contents available for entity extraction.")
-        return state
-        
-    llm = get_llm(capability="document_understanding")
-    structured_llm = llm.with_structured_output(ExtractionOutput)
-    
-    system_prompt = (
-        "You are a Senior Corporate Intelligence Analyst.\n"
-        "Given the extracted text/tables from a company's document, "
-        "extract any listed subsidiaries, parent organizations, divisions, or brands.\n"
-        "Return their name, country, ownership details, relationship type, and the exact evidence row/text fragment."
-    )
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", "Company: {company}\nSource URL: {url}\n\nDocument Text:\n{doc_text}")
-    ])
+    # 1. Map SEC Filing table items to raw claims
+    for s_res in sec_results:
+        sub_name = s_res.get("name")
+        if sub_name:
+            claim = {
+                "subject": legal_name,
+                "predicate": s_res.get("relationship_type", "Subsidiary"),
+                "object": sub_name,
+                "country": s_res.get("country", "Global"),
+                "ownership": s_res.get("ownership", "Wholly-owned"),
+                "source_type": s_res.get("source_type", "SEC EDGAR Exhibit 21"),
+                "source_url": s_res.get("source_url"),
+                "extracted_text": s_res.get("evidence_text", f"Exhibit 21 Disclosure: {sub_name}")
+            }
+            raw_claims.append(claim)
+            discovered.append({
+                "name": sub_name,
+                "legal_name": sub_name,
+                "country": s_res.get("country", "Global"),
+                "ownership": s_res.get("ownership", "Wholly-owned"),
+                "parent": legal_name,
+                "relationship_type": s_res.get("relationship_type", "Subsidiary"),
+                "confidence": 0.95,
+                "evidences": [{
+                    "source_type": s_res.get("source_type", "SEC EDGAR Exhibit 21"),
+                    "source_url": s_res.get("source_url"),
+                    "extracted_text": claim["extracted_text"]
+                }],
+                "notes": f"Statutory Exhibit 21 Disclosure for CIK {state['company_info'].get('cik')}"
+            })
 
-    for url, text in document_contents.items():
-        logs.append(f"Extracting entities from document content: {url}")
-        try:
-            from app.services.vector_retrieval import retrieval_service
-            
-            # Retrieve top most relevant chunks containing subsidiaries
-            query = f"subsidiaries list of entities affiliate corporate structure of {legal_name}"
-            relevant_chunks = await retrieval_service.retrieve_relevant_chunks(query, top_k=8, rerank_k=4)
-            
-            if relevant_chunks:
-                logs.append(f"Retrieved {len(relevant_chunks)} high-relevance chunks from Qdrant vector database.")
-                doc_text = "\n\n".join([f"--- Chunk {c['chunk_index']} ---\n{c['text']}" for c in relevant_chunks])
-            else:
-                logs.append("No relevant chunks found in Qdrant. Falling back to head of document text.")
-                doc_text = text[:15000]
-                
+    if not document_contents and not document_chunks:
+        msg = "STRUCTURED_EXTRACTION_SKIPPED_NO_CHUNKS: No document text chunks available for LLM parsing."
+        logs.append(msg)
+        if not raw_claims:
+            warnings.append({"stage": "structured_entity_extraction", "code": "NO_CHUNKS", "message": msg})
+        return {
+            "raw_claims": raw_claims,
+            "extracted_document_results": discovered,
+            "logs": logs,
+            "warnings": warnings
+        }
+        
+    try:
+        llm = get_llm(capability="document_understanding")
+        structured_llm = llm.with_structured_output(ExtractionOutput)
+        
+        system_prompt = (
+            "You are a Senior Corporate Intelligence Analyst.\n"
+            "Given text/tables, extract any listed subsidiaries, parents, divisions, or brands."
+        )
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", "Company: {company}\nSource URL: {url}\n\nDocument Text:\n{doc_text}")
+        ])
+
+        for url, text in document_contents.items():
+            doc_text = text[:10000]
             chain = prompt | structured_llm
             result = await chain.ainvoke({
                 "company": legal_name,
@@ -68,13 +97,25 @@ async def structured_entity_extraction_agent(state: AgentState) -> AgentState:
                 "doc_text": doc_text
             })
             
-            import re
             suffixes = {"inc", "llc", "ltd", "corp", "co", "plc", "gmbh", "ag", "sa", "bv", "nv", "sarl", "as", "pvt", "private", "limited", "company"}
             for entity in result.entities:
                 name_clean = entity.name.strip()
                 name_lower = re.sub(r'[^\w\s]', '', name_clean).strip().lower()
                 if not name_clean or name_lower in suffixes or len(name_lower) < 3:
                     continue
+                    
+                claim = {
+                    "subject": legal_name,
+                    "predicate": entity.relationship_type or "Subsidiary",
+                    "object": name_clean,
+                    "country": entity.country or "Global",
+                    "ownership": entity.ownership or "Not Publicly Disclosed",
+                    "source_type": "Annual Report PDF",
+                    "source_url": url,
+                    "extracted_text": entity.evidence_text
+                }
+                raw_claims.append(claim)
+                
                 discovered.append({
                     "name": name_clean,
                     "legal_name": name_clean,
@@ -82,20 +123,22 @@ async def structured_entity_extraction_agent(state: AgentState) -> AgentState:
                     "ownership": entity.ownership or "Not Publicly Disclosed",
                     "parent": legal_name,
                     "relationship_type": entity.relationship_type,
-                    "confidence": 0.90, # High confidence from official PDF reports
+                    "confidence": 0.90,
                     "evidences": [{
                         "source_type": "Annual Report PDF",
                         "source_url": url,
                         "extracted_text": entity.evidence_text
                     }],
-                    "notes": f"Extracted from official document: {url}"
+                    "notes": f"Extracted from document: {url}"
                 })
-        except Exception as e:
-            logger.error(f"Structured entity extraction failed for {url}: {str(e)}")
-            logs.append(f"Structured extraction error for {url}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Structured entity extraction failed: {str(e)}")
+        logs.append(f"Structured extraction error: {str(e)}")
 
-    logs.append(f"Structured Entity Extraction complete. Extracted {len(discovered)} corporate entities.")
+    logs.append(f"Structured Entity Extraction complete. Produced {len(raw_claims)} raw claims and {len(discovered)} extracted entities.")
     return {
+        "raw_claims": raw_claims,
         "extracted_document_results": discovered,
-        "logs": logs
+        "logs": logs,
+        "warnings": warnings
     }

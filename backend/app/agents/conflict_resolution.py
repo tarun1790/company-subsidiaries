@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from app.agents.state import AgentState
 from app.agents.llm import get_llm
 from app.core.logging import logger
@@ -23,12 +23,27 @@ async def conflict_resolution_agent(state: AgentState) -> AgentState:
     if not subs:
         return state
         
-    logs.append("Running Evidence Conflict Resolution Agent...")
-    logger.info("Executing conflict resolution checks.")
+    logs.append(f"Running Fast Conflict Resolution Agent over {len(subs)} entities...")
+    logger.info("Executing conflict resolution checks...")
+
+    # Fast-Path: Identify only entities with multi-source evidence containing potential contradiction terms
+    conflict_candidates = []
+    conflict_keywords = {"sold", "divested", "former", "dissolved", "acquired", "merged", "inactive", "struck off"}
     
-    # Format candidates context list with evidence source texts
-    candidates_context = []
     for s in subs:
+        evidences = s.get("evidences", [])
+        combined_text = " ".join([ev.get("extracted_text", "").lower() for ev in evidences])
+        if len(evidences) > 1 and any(kw in combined_text for kw in conflict_keywords):
+            conflict_candidates.append(s)
+
+    if not conflict_candidates:
+        logs.append("No active evidence conflicts detected across candidate entities.")
+        return state
+
+    logs.append(f"Found {len(conflict_candidates)} potential conflict candidates for deep AI auditing...")
+    
+    candidates_context = []
+    for s in conflict_candidates:
         ev_texts = [f"[{ev['source_type']}]: {ev.get('extracted_text', 'Verified')}" for ev in s.get("evidences", [])]
         candidates_context.append(
             f"Entity: {s['name']}\n"
@@ -36,56 +51,44 @@ async def conflict_resolution_agent(state: AgentState) -> AgentState:
             f"Reported Ownership: {s.get('ownership')}\n"
             f"Claims:\n" + "\n".join(ev_texts)
         )
-        
-    llm = get_llm(capability="reasoning")
-    structured_llm = llm.with_structured_output(ConflictResolutionOutput)
-    
-    system_prompt = (
-        "You are an expert Evidence Conflict Resolution Agent.\n"
-        "Your task is to identify contradiction conflicts (e.g., one source says owned, another says sold; "
-        "or competing parent claims like Google vs Alphabet).\n"
-        "RULES:\n"
-        "1. Reconcile parent hierarchy chains (e.g. Alphabet owns Google, Google owns DeepMind, so both Alphabet and Google own DeepMind indirectly. This is NOT a contradiction, resolve it to Alphabet/Google).\n"
-        "2. If one source explicitly says 'sold' or 'divested' and is newer or authoritative (like a news report or press release after an annual report), mark the conflict resolved with the divested status, or flag as has_conflict = True if unresolved."
-    )
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", "Ultimate Parent: {parent}\n\nCandidate Entities Auditing:\n{context}")
-    ])
-    
-    resolved_subs = []
+
     try:
+        llm = get_llm(capability="reasoning")
+        structured_llm = llm.with_structured_output(ConflictResolutionOutput)
+        
+        system_prompt = (
+            "You are an expert Evidence Conflict Resolution Agent.\n"
+            "Your task is to identify contradiction conflicts (e.g. one source says owned, another says sold).\n"
+            "If resolved, state why; if contradictory, flag has_conflict = True."
+        )
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", "Ultimate Parent: {parent}\n\nCandidate Entities Auditing:\n{context}")
+        ])
+        
         chain = prompt | structured_llm
         result = await chain.ainvoke({
             "parent": legal_name,
-            "context": "\n\n".join(candidates_context)[:25000]
+            "context": "\n---\n".join(candidates_context)
         })
         
-        for res in result.resolutions:
-            matching_sub = next((s for s in subs if s["name"].lower().strip() == res.name.lower().strip()), None)
-            if matching_sub:
-                matching_sub["conflict_detected"] = res.has_conflict
-                if res.has_conflict:
-                    matching_sub["notes"] = f"Warning: Contradictory evidence detected. {res.explanation}"
-                else:
-                    matching_sub["notes"] = res.explanation
-                resolved_subs.append(matching_sub)
-                
-        # Keep any items not processed by LLM as-is
-        processed_names = {res.name.lower().strip() for res in result.resolutions}
+        res_map = {r.name.lower().strip(): r for r in result.resolutions}
+        
+        updated_subs = []
         for s in subs:
-            if s["name"].lower().strip() not in processed_names:
-                s["conflict_detected"] = False
-                resolved_subs.append(s)
-                
-        logs.append(f"Evidence Conflict Resolution completed. Audited {len(resolved_subs)} entities.")
-        return {
-            **state,
-            "subsidiaries": resolved_subs,
-            "logs": logs
-        }
+            s_key = s["name"].lower().strip()
+            if s_key in res_map:
+                res_item = res_map[s_key]
+                if res_item.has_conflict:
+                    s["is_conflicting"] = True
+                    s["notes"] = (s.get("notes", "") + f" Conflict: {res_item.explanation}").strip()
+                elif res_item.resolved_value:
+                    s["notes"] = (s.get("notes", "") + f" Resolved: {res_item.explanation}").strip()
+            updated_subs.append(s)
+            
+        return {**state, "subsidiaries": updated_subs, "logs": logs}
+        
     except Exception as e:
-        logger.error(f"Conflict Resolution Agent query failed: {str(e)}")
-        logs.append(f"Conflict resolution error: {str(e)}. Defaulting to input list.")
+        logger.warning(f"Fast conflict resolution AI warning: {str(e)}")
         return state

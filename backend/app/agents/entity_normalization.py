@@ -1,117 +1,77 @@
+import re
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any
 from app.agents.state import AgentState
 from app.agents.llm import get_llm
 from app.core.logging import logger
-from langchain_core.prompts import ChatPromptTemplate
 
-class NormalizedGroup(BaseModel):
-    original_names: List[str] = Field(description="List of raw original name variants belonging to this group.")
-    normalized_name: str = Field(description="Normalized canonical legal entity name.")
-
-class NormalizationConsensus(BaseModel):
-    normalized_entities: List[NormalizedGroup] = Field(default=[], description="Normalized groups.")
+def get_base_name_key(name: str) -> str:
+    """Deterministic fast-path key generator that strips legal endings and punctuation."""
+    n = name.lower().strip()
+    n = re.sub(r"[^\w\s]", "", n)
+    endings = {"ltd", "limited", "llc", "gmbh", "inc", "corp", "co", "plc", "bv", "sa", "pty", "sarl", "ag", "pvt", "private", "company"}
+    words = n.split()
+    base_words = [w for w in words if w not in endings]
+    return " ".join(base_words) if base_words else n
 
 async def entity_normalization_agent(state: AgentState) -> AgentState:
-    """Agent 10: Reconciles entity name variants using structured AI consensus."""
+    """Agent 10: Reconciles entity name variants using fast-path deterministic base key grouping."""
     subs = state.get("subsidiaries", [])
     logs = state.get("logs", [])
-    legal_name = state["company_info"].get("legal_name") or state["query"]
     
     if not subs:
         return state
         
-    logs.append("Running Entity Normalization Agent...")
-    logger.info("Executing Entity Normalization consensus...")
+    logs.append(f"Running Fast Deterministic Entity Normalization for {len(subs)} candidate entities...")
+    logger.info(f"Executing Fast Entity Normalization for {len(subs)} entities...")
     
-    # 1. Format the candidates payload for LLM normalizer
-    candidate_names = [s["name"] for s in subs]
-    
-    llm = get_llm(capability="classification")
-    structured_llm = llm.with_structured_output(NormalizationConsensus)
-    
-    system_prompt = (
-        "You are an expert Corporate entity registry reconciler.\n"
-        "Your task is to review candidate company name variants and group duplicates representing the same legal entity.\n"
-        "RULES:\n"
-        "1. Reconcile ONLY from the provided candidate names list.\n"
-        "2. Resolve typographical errors, regional variants, and missing endings (e.g. 'Acme UK' / 'Acme Services UK Limited' -> 'Acme Services UK Limited').\n"
-        "3. For each group, output a single normalized canonical legal name."
-    )
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", "Ultimate Parent: {parent}\nCandidate Names List:\n{names}")
-    ])
-    
-    try:
-        chain = prompt | structured_llm
-        consensus = await chain.ainvoke({
-            "parent": legal_name,
-            "names": "\n".join([f"- {n}" for n in candidate_names])
-        })
+    # Fast-Path: Deterministic Base Key Grouping
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for sub in subs:
+        raw_name = sub.get("name", "").strip()
+        if not raw_name:
+            continue
+        base_key = get_base_name_key(raw_name)
+        if base_key not in grouped:
+            grouped[base_key] = []
+        grouped[base_key].append(sub)
+
+    normalized_subs = []
+    for base_key, items in grouped.items():
+        # Pick the most complete/formal legal name as the canonical representative
+        canonical_item = max(items, key=lambda x: len(x.get("name", "")))
+        canonical_name = canonical_item["name"]
         
-        normalized_subs = []
-        import re
-        suffixes = {"inc", "llc", "ltd", "corp", "co", "plc", "gmbh", "ag", "sa", "bv", "nv", "sarl", "as", "pvt", "private", "limited", "company"}
-        processed_original_names = set()
-        
-        for group in consensus.normalized_entities:
-            norm_lower = re.sub(r'[^\w\s]', '', group.normalized_name).strip().lower()
-            if norm_lower in suffixes or len(norm_lower) < 3:
-                continue
-                
-            matched_items = []
-            for sub in subs:
-                sub_clean = sub["name"].strip().lower()
-                orig_cleans = [o.strip().lower() for o in group.original_names]
-                if sub_clean in orig_cleans or sub_clean == group.normalized_name.strip().lower() or any(sub_clean in oc for oc in orig_cleans):
-                    matched_items.append(sub)
-                    processed_original_names.add(sub_clean)
+        # Merge all evidences across grouped items
+        evidences = []
+        seen_ev = set()
+        for it in items:
+            for ev in it.get("evidences", []):
+                ev_key = f"{ev.get('source_type')}:{ev.get('source_url')}"
+                if ev_key not in seen_ev:
+                    seen_ev.add(ev_key)
+                    evidences.append(ev)
                     
-            if not matched_items:
-                continue
-                
-            # Merge evidences and notes
-            evidences = []
-            seen_ev = set()
-            for it in matched_items:
-                for ev in it.get("evidences", []):
-                    ev_key = f"{ev['source_type']}:{ev.get('source_url')}"
-                    if ev_key not in seen_ev:
-                        seen_ev.add(ev_key)
-                        evidences.append(ev)
-                        
-            country = next((it.get("country") for it in matched_items if it.get("country") and it["country"].lower() not in ["n/a", "unknown", "global", ""]), "Global")
-            ownership = next((it.get("ownership") for it in matched_items if it.get("ownership") and it["ownership"] not in ["Not Publicly Disclosed", "Unknown", ""]), "Not Publicly Disclosed")
-            reg_num = next((it.get("registration_number") for it in matched_items if it.get("registration_number")), None)
-            rel_type = next((it.get("relationship_type") for it in matched_items if it.get("relationship_type") and it["relationship_type"] != "Subsidiary"), "Subsidiary")
-            
-            normalized_subs.append({
-                "name": group.normalized_name,
-                "legal_name": group.normalized_name,
-                "country": country,
-                "ownership": ownership,
-                "parent": legal_name,
-                "relationship_type": rel_type,
-                "registration_number": reg_num,
-                "confidence": 0.0,
-                "evidences": evidences,
-                "notes": f"Normalized entity reconciled from variants: {', '.join(group.original_names)}."
-            })
-            
-        # CRITICAL FIX: Retain all un-normalized candidate entities so zero items are dropped!
-        for sub in subs:
-            if sub["name"].strip().lower() not in processed_original_names:
-                normalized_subs.append(sub)
-                
-        logs.append(f"Entity Normalization completed: consolidated/retained {len(normalized_subs)} clean corporate names (from {len(subs)} input items).")
-        return {
-            **state,
-            "subsidiaries": normalized_subs,
-            "logs": logs
-        }
-    except Exception as e:
-        logger.error(f"Entity Normalization LLM query failed: {str(e)}")
-        logs.append(f"Normalization consensus failed: {str(e)}. Defaulting to raw candidate list.")
-        return state
+        country = next((it.get("country") for it in items if it.get("country") and it.get("country") != "Global"), canonical_item.get("country") or "Global")
+        relationship_type = next((it.get("relationship_type") for it in items if it.get("relationship_type")), canonical_item.get("relationship_type") or "Subsidiary")
+        ownership = next((it.get("ownership") for it in items if it.get("ownership")), canonical_item.get("ownership") or "Wholly-owned")
+        confidence = max(float(it.get("confidence") or 0.80) for it in items)
+
+        normalized_subs.append({
+            "name": canonical_name,
+            "legal_name": canonical_name,
+            "country": country,
+            "ownership": ownership,
+            "relationship_type": relationship_type,
+            "registration_number": canonical_item.get("registration_number"),
+            "confidence": confidence,
+            "notes": f"Grouped {len(items)} source variants via base key '{base_key}'.",
+            "evidences": evidences
+        })
+
+    logs.append(f"Entity Normalization finished: Reconciled {len(subs)} candidates into {len(normalized_subs)} canonical entities.")
+    return {
+        **state,
+        "subsidiaries": normalized_subs,
+        "logs": logs
+    }

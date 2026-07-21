@@ -3,7 +3,7 @@ import httpx
 import tempfile
 import pdfplumber
 import pypdf
-from typing import Dict
+from typing import Dict, List, Any
 from app.agents.state import AgentState
 from app.core.logging import logger
 from app.core.redis_cache import cache_manager
@@ -36,7 +36,6 @@ async def download_and_parse_pdf(url: str, logs: list) -> str:
                 extracted_text = ""
                 matched_page_indices = []
                 
-                # Step 1: Use fast pypdf to scan page texts for keywords
                 try:
                     reader = pypdf.PdfReader(tmp_path)
                     for idx, page in enumerate(reader.pages):
@@ -55,7 +54,6 @@ async def download_and_parse_pdf(url: str, logs: list) -> str:
                     logger.warning(f"Fast PDF scan failed: {str(pe)}")
                     matched_page_indices = [0, 1, 2]
                 
-                # Step 2: Use pdfplumber only for the matched pages to extract formatted text/tables
                 if matched_page_indices:
                     with pdfplumber.open(tmp_path) as pdf:
                         for idx in matched_page_indices:
@@ -74,7 +72,7 @@ async def download_and_parse_pdf(url: str, logs: list) -> str:
                 os.unlink(tmp_path)
                 if extracted_text.strip():
                     try:
-                        await cache_manager.set(cache_key, extracted_text, expire=86400 * 7) # Cache for 7 days
+                        await cache_manager.set(cache_key, extracted_text, expire=86400 * 7)
                     except Exception as ce:
                         logger.debug(f"Cache save failed for PDF {url}: {str(ce)}")
                 return extracted_text
@@ -86,31 +84,58 @@ async def download_and_parse_pdf(url: str, logs: list) -> str:
     return ""
 
 async def document_intelligence_agent(state: AgentState) -> AgentState:
-    """Agent 7: Document Intelligence download and parsing worker."""
+    """Agent 7: Document Intelligence ingestion worker with explicit skip reasons and canonical key output."""
     discovered_docs = state.get("discovered_documents", [])
+    sec_results = state.get("sec_results", [])
     logs = state.get("logs", [])
+    warnings = state.get("warnings", [])
     
     logs.append("Running Document Intelligence Agent (parsing and text extraction)...")
     
+    source_documents = []
+    document_chunks = []
     document_contents = {}
     
-    # We download and parse the top 2 candidate documents to avoid high memory/time usage
-    target_docs = discovered_docs[:2]
+    # 1. Gather all document sources (discovered PDFs + SEC filings)
+    for doc in discovered_docs:
+        source_documents.append({"url": doc, "type": "pdf"})
+        
+    for sec_res in sec_results:
+        if sec_res.get("source_url"):
+            source_documents.append({"url": sec_res["source_url"], "type": "sec_filing"})
+            
+    if not source_documents:
+        msg = "DOCUMENT_INTELLIGENCE_SKIPPED_NO_SOURCE_DOCUMENTS: No discovered PDF documents or SEC filings available to ingest."
+        logs.append(msg)
+        warnings.append({"stage": "document_intelligence", "code": "NO_SOURCE_DOCUMENTS", "message": msg})
+        return {
+            "source_documents": [],
+            "document_chunks": [],
+            "document_contents": {},
+            "logs": logs,
+            "warnings": warnings
+        }
+
+    target_docs = [d["url"] for d in source_documents[:3]]
     for url in target_docs:
         logs.append(f"Downloading and extracting text from: {url}")
         content = await download_and_parse_pdf(url, logs)
         if content.strip():
             document_contents[url] = content
-            try:
-                from app.services.vector_retrieval import retrieval_service
-                await retrieval_service.index_document(url, content)
-                logs.append(f"Document indexed successfully in Qdrant Vector database: {url}")
-            except Exception as ve:
-                logger.error(f"Vector indexing failed for {url}: {str(ve)}")
-                logs.append(f"Vector indexing warning: {str(ve)}")
-            
-    logs.append(f"Text extraction completed for {len(document_contents)} documents.")
+            # Create document chunks for downstream structured entity extraction
+            chunks = [content[i:i+2000] for i in range(0, len(content), 1800)]
+            for c_idx, chunk in enumerate(chunks):
+                document_chunks.append({
+                    "doc_url": url,
+                    "chunk_id": f"{url}#chunk_{c_idx}",
+                    "text": chunk
+                })
+
+    logs.append(f"Text extraction completed. Created {len(document_chunks)} document chunks across {len(document_contents)} active files.")
     return {
+        "source_documents": source_documents,
+        "document_chunks": document_chunks,
         "document_contents": document_contents,
-        "logs": logs
+        "logs": logs,
+        "warnings": warnings
     }

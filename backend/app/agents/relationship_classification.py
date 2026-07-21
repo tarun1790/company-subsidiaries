@@ -6,43 +6,69 @@ from app.core.logging import logger
 async def relationship_classification_agent(state: AgentState) -> AgentState:
     """Agent 10: Classifies verified candidate links into Direct, Indirect, Brand, JV, or Holdings."""
     logs = state.get("logs") or []
-    subs = state.get("subsidiaries") or []
+    warnings = state.get("warnings") or []
+    subs = state.get("subsidiaries") or state.get("normalized_entities") or []
+    legal_name = state.get("company_info", {}).get("legal_name") or state.get("query")
     
     logs.append("Running Relationship Classification Agent...")
     
+    if not subs:
+        msg = "RELATIONSHIP_CLASSIFICATION_ZERO_OUTPUT: No candidate entities available to classify."
+        logs.append(msg)
+        warnings.append({"stage": "relationship_classification", "code": "ZERO_OUTPUT", "message": msg})
+        return {
+            "relationships": [],
+            "logs": logs,
+            "warnings": warnings
+        }
+
+    relationships = []
+    classified_subs = []
+    
     for s in subs:
-        name = s.get("name", "").lower()
+        name = s.get("name", "")
+        name_lower = name.lower()
         ownership = str(s.get("ownership", "")).lower()
         
-        if "holding" in name or "securit" in name:
-            s["relationship_type"] = "Holding Company"
-        elif "brand" in name or "trade" in name:
-            s["relationship_type"] = "Brand"
-        elif "joint" in name or "jv" in name or "venture" in name:
-            s["relationship_type"] = "Joint Venture"
-        elif "office" in name or "branch" in name:
-            s["relationship_type"] = "Regional Office"
-        elif "acquisition" in name or "acquired" in name:
-            s["relationship_type"] = "Acquired Company"
-        elif "operating" in name or "operat" in name:
-            s["relationship_type"] = "Operating Company"
-        elif "division" in name or "business" in name:
-            s["relationship_type"] = "Business Unit"
+        if "holding" in name_lower or "securit" in name_lower:
+            rel_type = "Holding Company"
+        elif "brand" in name_lower or "trade" in name_lower:
+            rel_type = "Brand"
+        elif "joint" in name_lower or "jv" in name_lower or "venture" in name_lower:
+            rel_type = "Joint Venture"
+        elif "office" in name_lower or "branch" in name_lower:
+            rel_type = "Regional Office"
+        elif "acquisition" in name_lower or "acquired" in name_lower:
+            rel_type = "Acquired Company"
+        elif "operating" in name_lower or "operat" in name_lower:
+            rel_type = "Operating Company"
+        elif "division" in name_lower or "business" in name_lower:
+            rel_type = "Business Unit"
         else:
             if "%" in ownership:
                 try:
                     pct = float(re.findall(r'(\d+)', ownership)[0])
-                    if pct < 50:
-                        s["relationship_type"] = "Minority Investment"
-                    else:
-                        s["relationship_type"] = "Direct Subsidiary"
+                    rel_type = "Minority Investment" if pct < 50 else "Direct Subsidiary"
                 except Exception:
-                    s["relationship_type"] = "Direct Subsidiary"
+                    rel_type = "Direct Subsidiary"
             else:
-                s["relationship_type"] = "Direct Subsidiary"
+                rel_type = "Direct Subsidiary"
                 
+        s["relationship_type"] = rel_type
+        classified_subs.append(s)
+        
+        relationships.append({
+            "source": s.get("parent") or legal_name,
+            "target": name,
+            "relationship_type": rel_type,
+            "ownership": s.get("ownership", "100%"),
+            "confidence": s.get("confidence", 0.85)
+        })
+
+    logs.append(f"Relationship Classification produced {len(relationships)} classified relationship edges.")
     return {
-        **state,
-        "subsidiaries": subs,
-        "logs": logs
+        "subsidiaries": classified_subs,
+        "relationships": relationships,
+        "logs": logs,
+        "warnings": warnings
     }

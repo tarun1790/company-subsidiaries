@@ -12,7 +12,6 @@ def get_base_name_key(name: str) -> str:
     words = n.split()
     base = " ".join([w for w in words if w not in endings]).strip()
     
-    # Extract suffix to differentiate regional legal entities
     suffix = ""
     for w in words:
         if w in endings:
@@ -21,13 +20,14 @@ def get_base_name_key(name: str) -> str:
     return f"{base}_{suffix}" if suffix else base
 
 async def evidence_fusion_agent(state: AgentState) -> AgentState:
-    """Agent 9: Merges duplicate corporate entities, groups evidence trail matrices."""
+    """Agent 9: Consolidates evidence, fuses claims into canonical entity candidates and records."""
     logs = state.get("logs", [])
+    warnings = state.get("warnings", [])
     legal_name = state["company_info"].get("legal_name") or state["query"]
     
     logs.append("Running Evidence Fusion Agent...")
     
-    # Gather candidates from namespaced collector outputs
+    # Gather candidates from all namespaced collectors
     subs = []
     subs.extend(state.get("sec_results") or [])
     subs.extend(state.get("website_results") or [])
@@ -39,28 +39,30 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
     logger.info(f"Evidence Fusion Agent consolidating {len(subs)} candidate items from all sources.")
     
     if not subs:
-        logs.append("No new subsidiary records found to merge in this iteration.")
+        msg = "EVIDENCE_FUSION_SKIPPED_NO_RAW_CLAIMS: No candidate items available to fuse."
+        logs.append(msg)
+        warnings.append({"stage": "evidence_fusion", "code": "NO_RAW_CLAIMS", "message": msg})
         return {
-            **state,
-            "logs": logs
+            "evidence_records": [],
+            "fused_claims": [],
+            "candidate_entities": [],
+            "logs": logs,
+            "warnings": warnings
         }
         
     parent_key = get_base_name_key(legal_name)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     
-    # Group candidates from current iteration
     for sub in subs:
         name = sub.get("name")
         if not name:
             continue
         if isinstance(name, dict):
-            logger.error(f"DEBUG: Found sub with name as dict: {sub}")
             name = name.get("name") or str(name)
         key = get_base_name_key(name)
         if not key:
             continue
             
-        # Refined Parent Collision check:
         if key == parent_key:
             n_clean = re.sub(r"[^\w]", "", name.lower())
             p_clean = re.sub(r"[^\w]", "", legal_name.lower())
@@ -73,7 +75,6 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
             grouped[key] = []
         grouped[key].append(sub)
         
-    # Merge existing subsidiaries from previous iterations
     existing_subs = state.get("subsidiaries") or []
     for sub in existing_subs:
         name = sub.get("name")
@@ -88,29 +89,35 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
         grouped[key].append(sub)
         
     fused_subs = []
+    evidence_records = []
+    fused_claims = []
+
     for key, items in grouped.items():
-        # Select cleanest/longest name as representatives
         sorted_names = sorted(items, key=lambda x: len(x["name"]), reverse=True)
         best_name = sorted_names[0]["name"]
         
-        # Consolidate evidence context lists
         evidences = []
         seen_ev = set()
         for item in items:
             for ev in item.get("evidences", []):
-                ev_key = f"{ev['source_type']}:{ev.get('source_url')}"
+                ev_key = f"{ev.get('source_type')}:{ev.get('source_url')}"
                 if ev_key not in seen_ev:
                     seen_ev.add(ev_key)
                     evidences.append(ev)
+                    evidence_records.append({
+                        "entity_name": best_name,
+                        "source_type": ev.get("source_type"),
+                        "source_url": ev.get("source_url"),
+                        "extracted_text": ev.get("extracted_text")
+                    })
                     
-        # Consolidate basic fields
         country = next((it.get("country") for it in items if it.get("country") and it["country"].lower() not in ["n/a", "unknown", "global", ""]), "Global")
         ownership = next((it.get("ownership") for it in items if it.get("ownership") and it["ownership"] not in ["Not Publicly Disclosed", "Unknown", ""]), "Not Publicly Disclosed")
         reg_num = next((it.get("registration_number") for it in items if it.get("registration_number")), None)
         rel_type = next((it.get("relationship_type") for it in items if it.get("relationship_type") and it["relationship_type"] != "Subsidiary"), "Subsidiary")
         parent_name = next((it.get("parent") for it in items if it.get("parent")), legal_name)
         
-        fused_subs.append({
+        fused_item = {
             "name": best_name,
             "legal_name": best_name,
             "country": country,
@@ -118,14 +125,24 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
             "parent": parent_name,
             "relationship_type": rel_type,
             "registration_number": reg_num,
-            "confidence": 0.0, # Will be set by scoring agent
+            "confidence": 0.85,
             "evidences": evidences,
             "notes": items[0].get("notes") or "Fused candidate entity."
+        }
+        fused_subs.append(fused_item)
+        fused_claims.append({
+            "subject": parent_name,
+            "predicate": rel_type,
+            "object": best_name,
+            "country": country
         })
         
-    logs.append(f"Evidence Fusion consolidated candidates count: {len(fused_subs)} (down from {len(subs) + len(existing_subs)}).")
+    logs.append(f"Evidence Fusion consolidated candidates count: {len(fused_subs)} (fused from {len(subs) + len(existing_subs)} inputs).")
     return {
-        **state,
         "subsidiaries": fused_subs,
-        "logs": logs
+        "candidate_entities": fused_subs,
+        "evidence_records": evidence_records,
+        "fused_claims": fused_claims,
+        "logs": logs,
+        "warnings": warnings
     }
