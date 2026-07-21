@@ -61,6 +61,13 @@ class ResolutionResult(BaseModel):
 def is_domain(query: str) -> bool:
     return "." in query and " " not in query
 
+WHOIS_PRIVACY_PROXIES = {
+    "perfect privacy", "whoisguard", "domains by proxy", "privacy protect", 
+    "redacted for privacy", "registrant privacy", "identity protect", "contact privacy", 
+    "super privacy", "whois privacy", "privacy service", "withheld for privacy", 
+    "privacyprotect", "domain privacy", "select privacy"
+}
+
 async def gather_whois_dns(domain: str) -> str:
     res = []
     # 1. DNS A record lookup
@@ -74,8 +81,13 @@ async def gather_whois_dns(domain: str) -> str:
     # 2. WHOIS registry lookup
     try:
         w = await asyncio.to_thread(whois.whois, domain)
+        org = str(w.org or w.get('organization') or "")
+        org_clean = org.strip()
+        if any(proxy in org_clean.lower() for proxy in WHOIS_PRIVACY_PROXIES):
+            org_clean = "Privacy Guard Proxy (Discarded)"
+            
         res.append(f"Registrar: {w.registrar}")
-        res.append(f"Registrant Org: {w.org or w.get('organization')}")
+        res.append(f"Registrant Org: {org_clean}")
         res.append(f"Registrant Country: {w.country}")
         if w.creation_date:
             dates = w.creation_date if isinstance(w.creation_date, list) else [w.creation_date]
