@@ -27,9 +27,12 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
     
     # Fast-Path: Deterministic Base Key Grouping
     grouped: Dict[str, List[Dict[str, Any]]] = {}
+    parent_name = state.get("company_info", {}).get("legal_name") or state["query"]
+    from app.agents.cost_optimizer import CostOptimizer
+    
     for sub in subs:
         raw_name = sub.get("name", "").strip()
-        if not raw_name:
+        if not CostOptimizer.is_valid_entity_name(raw_name, parent_name):
             continue
         base_key = get_base_name_key(raw_name)
         if base_key not in grouped:

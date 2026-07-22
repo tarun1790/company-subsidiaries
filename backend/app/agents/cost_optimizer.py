@@ -9,6 +9,27 @@ class CostOptimizer:
     # Common corporate legal suffixes
     SUFFIX_PATTERN = r'\b(Inc|LLC|Ltd|Limited|Corp|Corporation|Co|Company|GmbH|AG|SA|BV|NV|SARL|Pty|Pvt|Private|PLC|Holdings|Group|S\.A\.P\.I\.|S\.R\.L\.|S\.A\.)\b'
 
+    INVALID_PHRASES = {
+        "exhibit", "ex-21", "form 10-k", "list of subsidiaries", "sec filing", "index.htm", 
+        "parent company", "structure chart", "find the group", "called", "operating as", 
+        "multinational", "part of", "division of", "headquartered in", "named ceo", 
+        "listed company", "arm of", "subsidiary of", "see note", "pursuant to", "item 15",
+        "registered in", "incorporated in", "corporation ("
+    }
+
+    @classmethod
+    def is_valid_entity_name(cls, name: str, parent_name: str) -> bool:
+        if not name or len(name.strip()) < 3 or len(name.strip()) > 100:
+            return False
+        n_lower = name.lower().strip()
+        if n_lower == parent_name.lower().strip():
+            return False
+        if any(phrase in n_lower for phrase in cls.INVALID_PHRASES):
+            return False
+        if n_lower.startswith(("as well as", "with the", "called ", "and listed", "cloud &", "consulting.", "structure chart")):
+            return False
+        return True
+
     @classmethod
     def fast_extract_entities_from_text(cls, text: str, parent_name: str) -> Tuple[List[Dict[str, Any]], bool]:
         """Fast-path Tier 0 & Tier 1 extraction using regex pattern matching and structural cues.
@@ -30,8 +51,7 @@ class CostOptimizer:
             raw_name = match[0] if isinstance(match, tuple) else match
             clean_name = re.sub(r'\s+', ' ', raw_name).strip()
             
-            # Filter parent self-collisions or short noise
-            if clean_name.lower() == parent_name.lower() or len(clean_name) < 4:
+            if not cls.is_valid_entity_name(clean_name, parent_name):
                 continue
 
             clean_key = clean_name.lower()
