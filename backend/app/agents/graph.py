@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import time
 import asyncio
 import uuid
@@ -222,13 +222,35 @@ def build_workflow():
 
     return workflow.compile(checkpointer=MemorySaver())
 
-async def execute_pipeline(initial_state: AgentState) -> AgentState:
+async def execute_pipeline(initial_state_or_query: Any, progress_hook: Any = None, thread_id: Optional[str] = None) -> AgentState:
     """Executes the compiled multi-agent state graph pipeline."""
     graph = build_workflow()
-    thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
+    tid = thread_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": tid}}
     
-    logger.info(f"Initiating corporate subsidiary intelligence pipeline for query: {initial_state.get('query')} | Thread ID: {thread_id}")
+    if isinstance(initial_state_or_query, str):
+        initial_state = {
+            "query": initial_state_or_query,
+            "company_info": {},
+            "subsidiaries": [],
+            "sec_results": [],
+            "website_results": [],
+            "registry_results": [],
+            "search_results": [],
+            "domain_results": [],
+            "discovered_documents": [],
+            "extracted_document_results": [],
+            "document_contents": {},
+            "knowledge_graph": {},
+            "pending_targets": [],
+            "explored_entities": [],
+            "logs": [],
+            "errors": []
+        }
+    else:
+        initial_state = initial_state_or_query
+    
+    logger.info(f"Initiating corporate subsidiary intelligence pipeline for query: {initial_state.get('query')} | Thread ID: {tid}")
     
     # Initialize canonical keys if missing
     initial_state.setdefault("source_documents", [])
