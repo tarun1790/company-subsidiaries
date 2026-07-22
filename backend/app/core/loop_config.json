@@ -1,8 +1,8 @@
 {
-  "max_iterations": 5,
-  "max_depth": 3,
-  "no_new_entities_streak_threshold": 3,
-  "coverage_threshold": 0.95,
+  "max_iterations": 2,
+  "max_depth": 2,
+  "no_new_entities_streak_threshold": 1,
+  "coverage_threshold": 0.90,
   "timeouts": {
     "entity_resolution": 30.0,
     "collectors": 20.0,

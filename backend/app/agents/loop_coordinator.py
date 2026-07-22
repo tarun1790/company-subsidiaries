@@ -13,10 +13,10 @@ def load_config() -> Dict[str, Any]:
     except Exception:
         # Fallback default values
         return {
-            "max_iterations": 5,
-            "max_depth": 3,
-            "no_new_entities_streak_threshold": 3,
-            "coverage_threshold": 0.95,
+            "max_iterations": 2,
+            "max_depth": 2,
+            "no_new_entities_streak_threshold": 1,
+            "coverage_threshold": 0.90,
             "source_priorities": {
                 "SEC Filings": 1.0,
                 "Authoritative Registry": 0.95,
