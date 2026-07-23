@@ -17,12 +17,14 @@ export const App: React.FC = () => {
     currentStage: string;
     status: 'idle' | 'in_progress' | 'complete' | 'failed';
     results: CompanyDetails | null;
+    liveSubsidiaries: Array<{ name: string; legal_name?: string; country?: string; relationship_type?: string; confidence?: number; }>;
   }>({
     query: '',
     stageLogs: [],
     currentStage: '',
     status: 'idle',
-    results: null
+    results: null,
+    liveSubsidiaries: []
   });
 
   const handleStartSearch = (query: string) => {
@@ -32,7 +34,8 @@ export const App: React.FC = () => {
       stageLogs: ["Connecting to audit pipeline backend..."],
       currentStage: "entity_resolution",
       status: 'in_progress',
-      results: null
+      results: null,
+      liveSubsidiaries: []
     });
     setCurrentPage('search'); // Stay on search workspace page
 
@@ -47,9 +50,9 @@ export const App: React.FC = () => {
           nextLogs.push(msg.log);
         }
 
+        const nextSubs = msg.live_subsidiaries && msg.live_subsidiaries.length > 0 ? msg.live_subsidiaries : prev.liveSubsidiaries;
+
         if (msg.status === 'complete' && msg.company_id) {
-          // Pipeline finished successfully
-          // Construct details object
           const details: CompanyDetails = {
             company: {
               id: msg.company_id,
@@ -71,21 +74,35 @@ export const App: React.FC = () => {
             stageLogs: [...nextLogs, "Audit process completed successfully. Loading interface..."],
             currentStage: "done",
             status: 'complete',
-            results: details
+            results: details,
+            liveSubsidiaries: nextSubs
           };
         } else if (msg.status === 'failed') {
           return {
             ...prev,
             stageLogs: [...nextLogs, "Audit process failed. Please check backend logs."],
-            status: 'failed'
+            status: 'failed',
+            liveSubsidiaries: nextSubs
           };
+        }
+
+        let mappedStage = msg.stage;
+        if (["document_discovery", "document_intelligence", "structured_entity_extraction"].includes(msg.stage)) {
+            mappedStage = "doc_extraction";
+        } else if (["evidence_fusion", "entity_normalization", "relationship_classification", "entity_verification", "conflict_resolution", "relationship_verification", "confidence_scoring"].includes(msg.stage)) {
+            mappedStage = "verification";
+        } else if (["knowledge_graph_builder", "graph_validation", "corporate_hierarchy"].includes(msg.stage)) {
+            mappedStage = "corporate_hierarchy";
+        } else if (["coverage_estimator", "discovery_strategy_engine", "loop_coordinator", "next_target_preparer"].includes(msg.stage)) {
+            mappedStage = "corporate_hierarchy"; // Loop nodes
         }
 
         return {
           ...prev,
           stageLogs: nextLogs,
-          currentStage: msg.stage,
-          status: 'in_progress'
+          currentStage: mappedStage,
+          status: 'in_progress',
+          liveSubsidiaries: nextSubs
         };
       });
     };
@@ -103,7 +120,8 @@ export const App: React.FC = () => {
           stageLogs: ["HTTP pipeline audit completed successfully."],
           currentStage: "done",
           status: 'complete',
-          results: details
+          results: details,
+          liveSubsidiaries: []
         });
       } catch (httpErr: any) {
         console.error("HTTP Pipeline fallback failed: ", httpErr);
@@ -137,7 +155,8 @@ export const App: React.FC = () => {
         stageLogs: ["Fetching historical records from storage vault..."],
         currentStage: "fetching",
         status: 'in_progress',
-        results: null
+        results: null,
+        liveSubsidiaries: []
       });
       setCurrentPage('search'); // switch back to main panel to display loading/results
 
@@ -148,7 +167,8 @@ export const App: React.FC = () => {
         stageLogs: ["Loaded cache successfully."],
         currentStage: "done",
         status: 'complete',
-        results: data
+        results: data,
+        liveSubsidiaries: []
       });
     } catch (err) {
       console.error("Error loading historical company details: ", err);
@@ -166,7 +186,8 @@ export const App: React.FC = () => {
       stageLogs: [],
       currentStage: '',
       status: 'idle',
-      results: null
+      results: null,
+      liveSubsidiaries: []
     });
   };
 
@@ -187,6 +208,7 @@ export const App: React.FC = () => {
           stageLogs={pipelineState.stageLogs}
           currentStage={pipelineState.currentStage}
           status={pipelineState.status === 'failed' ? 'failed' : 'in_progress'}
+          liveSubsidiaries={pipelineState.liveSubsidiaries}
         />
       );
     }
@@ -200,7 +222,13 @@ export const App: React.FC = () => {
       );
     }
 
-    return <Home onSearch={handleStartSearch} />;
+    return (
+      <Home 
+        onSearch={handleStartSearch} 
+        liveSubsidiaries={pipelineState.liveSubsidiaries}
+        isAuditing={false}
+      />
+    );
   };
 
   return (

@@ -435,12 +435,7 @@ class ReportGenerator:
                 ])
 
     @staticmethod
-    def generate_json(company_info: Dict[str, Any], subsidiaries: List[Dict[str, Any]], output_path: str):
-        """Generates a structured JSON payload archive."""
-        payload = {
-            "company_metadata": company_info,
-            "subsidiaries": subsidiaries,
-            "generated_at": datetime.utcnow().isoformat()
-        }
+    def generate_json_v3(v3_report_data: Dict[str, Any], output_path: str):
+        """Generates a structured JSON payload archive adhering to V3 schema."""
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
+            json.dump(v3_report_data, f, indent=2, ensure_ascii=False)

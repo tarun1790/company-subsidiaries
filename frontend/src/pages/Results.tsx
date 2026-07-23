@@ -24,48 +24,37 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
 
   const { company, subsidiaries, reports } = details;
 
-  // Categorize entities based on relationship type metadata
+  // Categorize entities based on V3 status
   const categorizedEntities = useMemo(() => {
-    const subs: Subsidiary[] = [];
-    const brands: Subsidiary[] = [];
-    const acqs: Subsidiary[] = [];
-    const units: Subsidiary[] = [];
-    const parents: Subsidiary[] = [];
-    const candidates: Subsidiary[] = [];
+    const verified: Subsidiary[] = [];
+    const probable: Subsidiary[] = [];
+    const unverified: Subsidiary[] = [];
+    const conflicting: Subsidiary[] = [];
+    const excluded: Subsidiary[] = [];
 
     subsidiaries.forEach(sub => {
-      const rel = (sub.relationship_type || '').toLowerCase().trim();
-      if (rel === 'brand') {
-        brands.push(sub);
-      } else if (rel === 'acquisition' || rel.includes('acquired')) {
-        acqs.push(sub);
-      } else if (rel.includes('division') || rel.includes('office') || rel.includes('unit') || rel.includes('segment') || rel.includes('venture')) {
-        units.push(sub);
-      } else if (rel === 'parent' || rel.includes('holding')) {
-        parents.push(sub);
-      } else {
-        subs.push(sub);
-      }
-
-      // Keep candidates tab for entities below 80% confidence
-      if (sub.confidence < 0.80) {
-        candidates.push(sub);
-      }
+      const status = sub.status || 'Unknown';
+      if (status === 'Confirmed') verified.push(sub);
+      else if (status === 'Probable') probable.push(sub);
+      else if (status === 'Unverified') unverified.push(sub);
+      else if (status === 'Conflicting' || sub.requires_review) conflicting.push(sub);
+      else if (status === 'Excluded' || status === 'Dissolved' || status === 'Inactive') excluded.push(sub);
+      else probable.push(sub); // Fallback
     });
 
-    return { subs, brands, acqs, units, parents, candidates };
+    return { verified, probable, unverified, conflicting, excluded };
   }, [subsidiaries]);
 
   // Determine active dataset based on selected tab
   const activeList = useMemo(() => {
-    if (activeTab === 'subsidiaries') return categorizedEntities.subs;
-    if (activeTab === 'brands') return categorizedEntities.brands;
-    if (activeTab === 'acquisitions') return categorizedEntities.acqs;
-    if (activeTab === 'units') return categorizedEntities.units;
-    if (activeTab === 'parents') return categorizedEntities.parents;
-    if (activeTab === 'candidates') return categorizedEntities.candidates;
+    if (activeTab === 'subsidiaries') return categorizedEntities.verified;
+    if (activeTab === 'brands') return categorizedEntities.probable;
+    if (activeTab === 'acquisitions') return categorizedEntities.unverified;
+    if (activeTab === 'units') return categorizedEntities.conflicting;
+    if (activeTab === 'parents') return categorizedEntities.excluded;
+    if (activeTab === 'candidates') return subsidiaries; // All Entities
     return [];
-  }, [activeTab, categorizedEntities]);
+  }, [activeTab, categorizedEntities, subsidiaries]);
 
   // Calculate unique countries for filter list
   const countries = useMemo(() => {
@@ -134,50 +123,9 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
         </button>
       </div>
 
-      {company.original_query && (
-        <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Entity Classification & Parent Resolution</span>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-sm text-slate-500 font-medium">Original Input:</span>
-                <span className="text-base font-bold text-slate-900">"{company.original_query}"</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500 font-semibold bg-white border border-slate-200 px-3 py-1 rounded-full shadow-sm flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
-                Type: {company.entity_classification || "Public Company"}
-              </span>
-              <span className="text-xs text-slate-500 font-semibold bg-white border border-slate-200 px-3 py-1 rounded-full shadow-sm flex items-center gap-1.5">
-                <Award className="h-3.5 w-3.5 text-emerald-500" />
-                Confidence: {Math.round((company.confidence || 0.95) * 100)}%
-              </span>
-            </div>
-          </div>
-          
-          {company.original_query.toLowerCase().trim() !== (company.legal_name || '').toLowerCase().trim() && (
-            <div className="bg-white border border-slate-200/60 rounded-xl p-4 flex items-center gap-3.5 shadow-sm">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                <GitBranch className="h-5 w-5" />
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Resolved Canonical Corporate Parent</span>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-sm font-bold text-slate-900">{company.legal_name}</span>
-                  <span className="text-[10px] bg-indigo-50 border border-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold uppercase">Ultimate Parent</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-
-
       {/* Tabs list */}
-      <div className="border-b border-slate-200/80">
-        <nav className="flex gap-6 -mb-px">
+      <div className="border-b border-slate-200/80 overflow-x-auto whitespace-nowrap">
+        <nav className="flex gap-6 -mb-px px-2">
           <button
             onClick={() => setActiveTab('tree')}
             className={`pb-4 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
@@ -199,7 +147,7 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
             }`}
           >
             <Network className="h-4 w-4 text-brand-600" />
-            Knowledge Graph ({details.knowledge_graph?.edges.length || 0})
+            Graph ({details.knowledge_graph?.edges.length || 0})
           </button>
           
           <button
@@ -210,8 +158,8 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
-            <ListOrdered className="h-4 w-4" />
-            Verified Subsidiaries ({categorizedEntities.subs.length})
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            Confirmed ({categorizedEntities.verified.length})
           </button>
 
           <button
@@ -222,8 +170,8 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
-            <Award className="h-4 w-4" />
-            Brands ({categorizedEntities.brands.length})
+            <Compass className="h-4 w-4 text-brand-500" />
+            Probable ({categorizedEntities.probable.length})
           </button>
 
           <button
@@ -234,8 +182,8 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
-            <Building2 className="h-4 w-4" />
-            Acquisitions ({categorizedEntities.acqs.length})
+            <HelpCircle className="h-4 w-4 text-amber-500" />
+            Unverified ({categorizedEntities.unverified.length})
           </button>
 
           <button
@@ -246,8 +194,8 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
-            <Compass className="h-4 w-4" />
-            Business Units ({categorizedEntities.units.length})
+            <ShieldAlert className="h-4 w-4 text-rose-500" />
+            Requires Review ({categorizedEntities.conflicting.length})
           </button>
 
           <button
@@ -258,8 +206,8 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
-            <Building2 className="h-4 w-4" />
-            Parent Companies ({categorizedEntities.parents.length})
+            <Building2 className="h-4 w-4 text-slate-400" />
+            Excluded/Historical ({categorizedEntities.excluded.length})
           </button>
 
           <button
@@ -270,8 +218,8 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
                 : 'border-transparent text-slate-500 hover:text-slate-900'
             }`}
           >
-            <HelpCircle className="h-4 w-4 text-amber-500" />
-            Candidate Discoveries ({categorizedEntities.candidates.length})
+            <ListOrdered className="h-4 w-4" />
+            All Entities ({subsidiaries.length})
           </button>
           
           <button
@@ -440,45 +388,72 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
 
             {/* Entities Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4.5">
-              {filteredSubs.map((sub, idx) => (
-                <div 
-                  key={idx}
-                  onClick={() => setSelectedEntity(sub)}
-                  className="group rounded-xl border border-slate-200 bg-white p-5 hover:border-brand-300 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between"
-                >
-                  <div>
-                    <div className="flex justify-between items-start gap-2">
-                      <span className="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
-                        {sub.relationship_type || 'Subsidiary'}
-                      </span>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${
-                        sub.confidence >= 0.95 ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                        sub.confidence >= 0.80 ? 'bg-emerald-50/50 text-emerald-600 border-emerald-100/50' :
-                        sub.confidence >= 0.60 ? 'bg-amber-50 text-amber-700 border-amber-100' :
-                        sub.confidence >= 0.40 ? 'bg-orange-50 text-orange-700 border-orange-100' :
-                        'bg-rose-50 text-rose-700 border-rose-100'
-                      }`}>
-                        {sub.confidence >= 0.95 ? '🟢 ' :
-                         sub.confidence >= 0.80 ? '🟢 ' :
-                         sub.confidence >= 0.60 ? '🟡 ' :
-                         sub.confidence >= 0.40 ? '🟠 ' : '🔴 '}
-                        {(sub.confidence * 100).toFixed(0)}% Match
+              {filteredSubs.map((sub, idx) => {
+                const isConflict = sub.status === 'Conflicting' || sub.requires_review;
+                
+                return (
+                  <div 
+                    key={idx}
+                    onClick={() => setSelectedEntity(sub)}
+                    className={`group rounded-xl border bg-white p-5 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between ${
+                      isConflict ? 'border-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.1)] hover:border-rose-400' : 'border-slate-200 hover:border-brand-300'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex justify-between items-start gap-2">
+                        <span className="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
+                          {sub.relationship_type || 'Subsidiary'}
+                        </span>
+                        
+                        <div className="flex gap-1">
+                          {isConflict && (
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded border bg-rose-50 text-rose-700 border-rose-100 flex items-center gap-1">
+                              <ShieldAlert className="h-3 w-3" />
+                              Review
+                            </span>
+                          )}
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${
+                            sub.confidence >= 0.95 ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                            sub.confidence >= 0.80 ? 'bg-emerald-50/50 text-emerald-600 border-emerald-100/50' :
+                            sub.confidence >= 0.60 ? 'bg-amber-50 text-amber-700 border-amber-100' :
+                            sub.confidence >= 0.40 ? 'bg-orange-50 text-orange-700 border-orange-100' :
+                            'bg-rose-50 text-rose-700 border-rose-100'
+                          }`}>
+                            {sub.confidence >= 0.95 ? '🟢 ' :
+                             sub.confidence >= 0.80 ? '🟢 ' :
+                             sub.confidence >= 0.60 ? '🟡 ' :
+                             sub.confidence >= 0.40 ? '🟠 ' : '🔴 '}
+                            {(sub.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <h4 className="font-bold text-sm text-slate-900 mt-2 tracking-tight group-hover:text-brand-900 transition-colors">
+                        {sub.name}
+                      </h4>
+                      
+                      {isConflict && sub.conflicts && sub.conflicts.length > 0 && (
+                        <div className="mt-2 text-[10px] bg-rose-50/50 rounded-lg p-2 border border-rose-100/50">
+                          <span className="font-bold text-rose-700 block mb-1">Conflicting Fields:</span>
+                          {sub.conflicts.map((c, cIdx) => (
+                            <div key={cIdx} className="text-rose-600/80 mb-1 last:mb-0">
+                              <span className="font-semibold uppercase text-[9px] tracking-wider">{c.field}:</span> {c.claims.length} variants found
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-500 font-semibold">
+                      <span className="truncate max-w-[150px]">{sub.country || 'Global'}</span>
+                      <span className="flex items-center gap-0.5 text-brand-700 group-hover:gap-1 transition-all">
+                        Audit Trail
+                        <ChevronRight className="h-3 w-3" />
                       </span>
                     </div>
-                    <h4 className="font-bold text-sm text-slate-900 mt-2 tracking-tight group-hover:text-brand-900 transition-colors">
-                      {sub.name}
-                    </h4>
                   </div>
-
-                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-500 font-semibold">
-                    <span className="truncate max-w-[150px]">{sub.country || 'Global'}</span>
-                    <span className="flex items-center gap-0.5 text-brand-700 group-hover:gap-1 transition-all">
-                      Audit Trail
-                      <ChevronRight className="h-3 w-3" />
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
 
               {filteredSubs.length === 0 && (
                 <div className="col-span-full text-center py-12 text-slate-400 font-medium">

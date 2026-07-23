@@ -17,16 +17,42 @@ async def public_registry_agent(state: AgentState) -> AgentState:
 
     discovered = []
     try:
-        # Search parent company in OpenCorporates
-        registry_matches = await opencorporates.search_company(legal_name)
+        # Iterate over the fallback search plan for the main target
+        search_plan = company_info.get("search_plan", [legal_name])
+        main_target_hits = False
         
+        for plan_term in search_plan:
+            logs.append(f"Querying OpenCorporates fallback term: '{plan_term}'")
+            try:
+                records = await opencorporates.search_company(plan_term)
+                if records:
+                    main_target_hits = True
+                    for rec in records:
+                        discovered.append({
+                            "name": rec["name"],
+                            "legal_name": rec.get("legal_name") or rec["name"],
+                            "country": rec.get("country"),
+                            "ownership": "Not Publicly Disclosed", 
+                            "parent": legal_name,
+                            "relationship_type": "Subsidiary",
+                            "registration_number": rec.get("registration_number"),
+                            "confidence": 0.80, 
+                            "evidences": [{
+                                "source_type": "Public Registry",
+                                "source_url": "https://opencorporates.com",
+                                "extracted_text": f"Matched registry record: {rec['name']} (Number: {rec.get('registration_number')}, Jurisdiction: {rec.get('country')})"
+                            }],
+                            "notes": rec.get("notes") or "Matched registry record."
+                        })
+                    break # Stop fallback if we got hits
+            except Exception as oe:
+                logger.debug(f"OpenCorporates registry lookup failed for {plan_term}: {str(oe)}")
+                
         # If we have some discovered subsidiaries from Agent 2 or 3, lookup them too to verify registration number
-        lookup_targets = [legal_name]
-        # Get top 2 discovered subsidiaries to cross-reference
-        lookup_targets += [s["name"] for s in subsidiaries if s["name"] != legal_name][:2]
+        lookup_targets = [s["name"] for s in subsidiaries if s["name"] != legal_name][:2]
         
         for name in lookup_targets:
-            # 1. OpenCorporates query
+            # 1. OpenCorporates query for secondary targets
             try:
                 records = await opencorporates.search_company(name)
                 for rec in records:
@@ -49,9 +75,13 @@ async def public_registry_agent(state: AgentState) -> AgentState:
             except Exception as oe:
                 logger.error(f"OpenCorporates registry lookup failed for {name}: {str(oe)}")
 
-            # 2. GLEIF query
+            # 2. GLEIF query: LEI or legal name
             try:
-                gleif_records = await gleif_client.search_lei(name)
+                # Prioritize LEI if it's the main target and we resolved it
+                lei_code = company_info.get("lei") if name == legal_name else None
+                search_term = lei_code if lei_code else name
+                
+                gleif_records = await gleif_client.search_lei(search_term)
                 for rec in gleif_records:
                     discovered.append({
                         "name": rec["name"],

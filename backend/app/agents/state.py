@@ -1,5 +1,28 @@
 import operator
+import time
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
+
+def emit_node_telemetry(stage_name: str, state: dict, started_at: float, status: str):
+    duration_ms = int((time.time() - started_at) * 1000)
+
+    telemetry = {
+        "stage": stage_name,
+        "status": status,
+        "duration_ms": duration_ms,
+        "input_counts": {
+            "source_documents": len(state.get("source_documents", [])),
+            "document_chunks": len(state.get("document_chunks", [])),
+            "raw_claims": len(state.get("raw_claims", [])),
+            "candidate_entities": len(state.get("candidate_entities", [])),
+            "normalized_entities": len(state.get("normalized_entities", [])),
+            "relationships": len(state.get("relationships", [])),
+            "evidence_records": len(state.get("evidence_records", [])),
+        },
+        "warnings": state.get("warnings", [])[-5:],
+        "errors": state.get("errors", [])[-5:],
+    }
+
+    state.setdefault("telemetry", []).append(telemetry)
 
 def list_merger(current: Optional[List[Any]], update: Optional[List[Any]]) -> List[Any]:
     if current is None:
@@ -68,3 +91,4 @@ class AgentState(TypedDict, total=False):
     pending_targets: List[Dict[str, Any]]
     coverage_score: Dict[str, Any]
     as_of_date: Optional[str]
+    telemetry: Annotated[List[Dict[str, Any]], list_merger]

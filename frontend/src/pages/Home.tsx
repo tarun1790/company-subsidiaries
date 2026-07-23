@@ -3,10 +3,15 @@ import { Search, Globe, ChevronRight, Award, Compass } from 'lucide-react';
 
 interface HomeProps {
   onSearch: (query: string) => void;
+  liveSubsidiaries?: Array<{ name: string; legal_name?: string; country?: string; relationship_type?: string; }>;
+  isAuditing?: boolean;
 }
 
-export const Home: React.FC<HomeProps> = ({ onSearch }) => {
+export const Home: React.FC<HomeProps> = ({ onSearch, liveSubsidiaries = [], isAuditing = false }) => {
   const [query, setQuery] = useState('');
+
+  // Get the latest 5 discovered subsidiaries
+  const displaySubs = liveSubsidiaries.slice(-5).reverse();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,39 +56,56 @@ export const Home: React.FC<HomeProps> = ({ onSearch }) => {
         </form>
       </div>
 
-      {/* Core Platform Pillars (Value props) */}
-      <div className="mt-20 grid grid-cols-1 gap-6 sm:grid-cols-3">
-        
-        <div className="rounded-xl border border-slate-200/60 bg-white p-5 space-y-2 hover:shadow-sm transition-shadow">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600 border border-brand-100">
-            <Search className="h-5 w-5" />
+      {/* Dynamic Live Subsidiary Discovery Feed (Replaces static feature cards) */}
+      <div className="mt-16 bg-white border border-slate-200/80 rounded-2xl p-6 shadow-md">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
+            <h3 className="text-base font-bold text-slate-900">
+              {isAuditing ? "Live Audit Extraction Feed" : "Live Subsidiary Intelligence Stream"}
+            </h3>
           </div>
-          <h3 className="font-semibold text-sm text-slate-900">Multi-source Verification</h3>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Automatically aggregates reports across SEC filings, official site crawls, OpenCorporates registries, and SSL certificate logs.
-          </p>
+          <span className="text-xs font-semibold text-brand-700 bg-brand-50 px-2.5 py-1 rounded-full border border-brand-100">
+            Latest 5 Discovered Entities
+          </span>
         </div>
 
-        <div className="rounded-xl border border-slate-200/60 bg-white p-5 space-y-2 hover:shadow-sm transition-shadow">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600 border border-brand-100">
-            <Globe className="h-5 w-5" />
+        {displaySubs.length === 0 ? (
+          <div className="py-8 text-center text-slate-400 text-sm italic">
+            Enter a company name above to begin live hierarchy discovery. Discovered entities will stream here live.
           </div>
-          <h3 className="font-semibold text-sm text-slate-900">Traceable Evidence Matrix</h3>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Every discovered subsidiary is anchored by a confidence score and verifiable textual extracts mapping back to source URLs.
-          </p>
-        </div>
+        ) : (
+          <div className="space-y-3">
+            {displaySubs.map((sub, idx) => (
+              <div 
+                key={idx} 
+                className="flex items-center justify-between p-3.5 bg-slate-50/80 border border-slate-200/60 rounded-xl hover:border-brand-300 transition-all duration-300 shadow-2xs animate-fade-in"
+              >
+                <div className="flex items-center gap-3 truncate">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-800 text-xs font-bold">
+                    #{idx + 1}
+                  </div>
+                  <div className="truncate">
+                    <div className="text-sm font-bold text-slate-800 truncate">{sub.name}</div>
+                    <div className="text-xs text-slate-500 truncate">{sub.legal_name || sub.name}</div>
+                  </div>
+                </div>
 
-        <div className="rounded-xl border border-slate-200/60 bg-white p-5 space-y-2 hover:shadow-sm transition-shadow">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600 border border-brand-100">
-            <ChevronRight className="h-5 w-5" />
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-semibold rounded-md border border-blue-100">
+                    {sub.country || 'Global'}
+                  </span>
+                  <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-md border border-emerald-100">
+                    {sub.relationship_type || 'Subsidiary'}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
-          <h3 className="font-semibold text-sm text-slate-900">Automated Hierarchies</h3>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Extracts complex parent-subsidiary-brand layers, assembling interactive trees and premium compliance-grade PDF downloads.
-          </p>
-        </div>
-
+        )}
       </div>
 
     </div>

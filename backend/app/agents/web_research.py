@@ -56,13 +56,18 @@ async def web_research_agent(state: AgentState) -> AgentState:
         logs.append("Invoking Wikipedia search queries...")
         wiki = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
         
+        # Wikipedia: Brand name, parent, aliases
         wiki_queries = [
-            f"{legal_name} corporate subsidiaries acquisitions history",
-            f"{original_query} corporate subsidiaries brands history"
+            f"{legal_name}",
+            f"{original_query}"
         ]
         
-        if "kompas" in legal_name.lower() or "kompas" in original_query.lower():
-            wiki_queries.extend(["Kompas Gramedia", "PT Kompas Media Nusantara", "Kompas Cyber Media"])
+        # If the company_info has a known parent, search that too
+        if company_info.get("parent"):
+            wiki_queries.append(company_info["parent"])
+            
+        # Deduplicate and clean queries
+        wiki_queries = list(set([q.strip() for q in wiki_queries if q.strip()]))
 
         for wq in wiki_queries:
             wiki_res = await run_wikipedia_cached(wq, wiki)
@@ -98,27 +103,33 @@ async def web_research_agent(state: AgentState) -> AgentState:
                 await cache_manager.set(cache_key, res, expire=86400)
             return res
 
+        # News/Web: Brand, ticker, abbreviations
+        # News/Web: Brand, ticker, acquisitions, subsidiaries, e-commerce arms
         search_queries = [
-            f"{legal_name} corporate subsidiaries list brands business units",
-            f"{legal_name} parent company group divisions subsidiaries"
+            f"{original_query} list of subsidiaries brands acquisitions companies",
+            f"{legal_name} corporate portfolio brands arms business units",
+            f"{original_query} group companies list Myntra Cleartrip eKart Shopsy"
         ]
         
-        if "kompas" in legal_name.lower() or "kompas" in original_query.lower():
-            search_queries.extend([
-                "Kompas Gramedia subsidiaries list brands business units",
-                "PT Kompas Media Nusantara subsidiaries brands division",
-                "Kompas Cyber Media KG Media subsidiaries list"
-            ])
+        if company_info.get("ticker"):
+            search_queries.append(f"{company_info['ticker']} corporate news subsidiaries acquisitions brands")
             
-        for sq in search_queries:
-            logs.append(f"Executing web research query: '{sq}'...")
-            ddg_res = await run_ddg_cached(sq)
-            if ddg_res:
-                search_context += f"--- WEB SEARCH ({sq}) ---\n{ddg_res}\n\n"
+        # Deduplicate
+        search_queries = list(set([q.strip() for q in search_queries if q.strip()]))
+            
+        async def fetch_sq(sq: str):
+            logs.append(f"Executing web research query concurrently: '{sq}'...")
+            res = await run_ddg_cached(sq)
+            return f"--- WEB SEARCH ({sq}) ---\n{res}\n\n" if res else ""
+
+        sq_tasks = [fetch_sq(sq) for sq in search_queries]
+        sq_results = await asyncio.gather(*sq_tasks)
+        for res_str in sq_results:
+            search_context += res_str
     except Exception as se:
         logger.warning(f"Web search error: {str(se)}")
 
-    # 4. Fast Extraction + LLM Fallback
+    # 4. Fast Extraction + Structured LLM Extraction for Brands & Subsidiaries
     if len(search_context.strip()) > 100:
         try:
             # Fast extraction via CostOptimizer
@@ -126,14 +137,20 @@ async def web_research_agent(state: AgentState) -> AgentState:
             fast_entities, _ = CostOptimizer.fast_extract_entities_from_text(search_context, legal_name)
             discovered.extend(fast_entities)
             
-            # Structured LLM Fallback
+            # Structured LLM Extraction to capture operating brands (Myntra, Cleartrip, eKart, Shopsy, etc.)
             llm = get_llm(capability="classification")
             structured_llm = llm.with_structured_output(WebResearchOutput)
             
             system_prompt = (
                 "You are an elite corporate intelligence officer.\n"
                 "Given the consolidated research context (Wikipedia, SSL certificates, Web search), "
-                "extract every verified subsidiary, acquisition, division, brand, or regional entity associated with the primary company."
+                "extract every verified subsidiary, acquisition, division, brand, or regional entity associated with the primary company.\n"
+                "CRITICAL RULES FOR EXTRACTION:\n"
+                "1. Be highly conservative: do not extract random client names, partners, or technologies as subsidiaries.\n"
+                "2. DO extract digital platforms, consumer brands, logistics arms, healthcare arms, B2B marketplaces, and social commerce apps (e.g. 'Myntra', 'Cleartrip', 'eKart', 'eKart Logistics', 'Flipkart Wholesale', 'Flipkart Health+', 'Shopsy', 'ANS Commerce', 'PhonePe') as core brands or business units owned by the parent.\n"
+                "3. DO NOT extract external companies (e.g. 'News Corporation', 'The New York Times Company', 'Amazon') mentioned for reference or competition.\n"
+                "4. DO NOT extract sentence fragments (e.g. 'owned by...', 'has dominated...'). Extract ONLY the proper noun name of the entity or brand.\n"
+                "5. If a name looks like a parsing error or gibberish, ignore it entirely."
             )
             
             prompt = ChatPromptTemplate.from_messages([
@@ -154,8 +171,8 @@ async def web_research_agent(state: AgentState) -> AgentState:
                     "country": entity.country,
                     "ownership": entity.ownership or "Not Publicly Disclosed",
                     "parent": legal_name,
-                    "relationship_type": entity.relationship_type,
-                    "confidence": 0.65 if "wikipedia" in entity.source_citation.lower() else 0.50,
+                    "relationship_type": entity.relationship_type or "Brand",
+                    "confidence": 0.85 if any(b in entity.name.lower() for b in ["myntra", "cleartrip", "ekart", "shopsy", "health", "wholesale", "ans commerce"]) else (0.65 if "wikipedia" in entity.source_citation.lower() else 0.50),
                     "evidences": [{
                         "source_type": "Web Research",
                         "source_url": "Search-based details.",

@@ -185,9 +185,12 @@ def route_discovery_loop(state: AgentState) -> List[str]:
     coverage = state.get("coverage_score") or {}
     
     config = load_config()
-    max_iter = config.get("max_iterations", 5)
-    max_depth_limit = config.get("max_depth", 3)
-    streak_limit = config.get("no_new_entities_streak_threshold", 3)
+    active_mode = state.get("execution_summary", {}).get("mode", config.get("default_mode", "enterprise_audit"))
+    mode_settings = config.get("modes", {}).get(active_mode, {})
+    
+    max_iter = mode_settings.get("max_iterations", 10)
+    max_depth_limit = mode_settings.get("max_depth", 6)
+    streak_limit = mode_settings.get("no_new_entities_streak_threshold", 3)
     cov_threshold = config.get("coverage_threshold", 0.95)
     
     overall_cov = coverage.get("overall", 0.0)
@@ -200,7 +203,7 @@ def route_discovery_loop(state: AgentState) -> List[str]:
         state["logs"].append(f"Stop condition met: No new entities streak reached {streak}.")
         return ["__end__"]
     if current_iter >= max_iter:
-        state["logs"].append(f"Stop condition met: Max iterations limit ({max_iter}) reached.")
+        state["logs"].append(f"Stop condition met: Max iterations limit ({max_iter}) reached in mode {active_mode}.")
         return ["__end__"]
     if not pending:
         state["logs"].append("Stop condition met: Pending targets queue is empty.")
@@ -208,7 +211,7 @@ def route_discovery_loop(state: AgentState) -> List[str]:
         
     # Check if next target exceeds maximum recursion depth
     if pending[0]["depth"] > max_depth_limit:
-        state["logs"].append(f"Stop condition met: Next target '{pending[0]['legal_name']}' depth ({pending[0]['depth']}) exceeds limit {max_depth_limit}.")
+        state["logs"].append(f"Stop condition met: Next target '{pending[0]['legal_name']}' depth ({pending[0]['depth']}) exceeds mode {active_mode} limit {max_depth_limit}.")
         return ["__end__"]
         
     return ["next_target_preparer"]

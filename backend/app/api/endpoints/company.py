@@ -199,6 +199,7 @@ async def get_company_details(company_id: uuid.UUID, db: AsyncSession = Depends(
 @router.websocket("/ws/pipeline/{query:path}")
 async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession = Depends(get_db)):
     """WebSocket endpoint to initiate, track, and stream the 9-agent pipeline updates."""
+    query = query.split('?')[0].strip()
     await websocket.accept()
     logger.info(f"WebSocket client connected for query: {query}")
 
@@ -320,17 +321,36 @@ async def pipeline_websocket(websocket: WebSocket, query: str, db: AsyncSession 
     # Hook callback to stream progress logs over WebSocket
     async def progress_hook(stage: str, log_message: str, current_state: Dict[str, Any]):
         try:
+            subs = current_state.get("subsidiaries") or []
+            if not subs:
+                # Aggregate raw collector results instantly so entities show up in < 2 seconds
+                subs = (current_state.get("sec_results") or []) + \
+                       (current_state.get("website_results") or []) + \
+                       (current_state.get("registry_results") or []) + \
+                       (current_state.get("search_results") or [])
+
+            live_subs = []
+            for s in subs[:100]:
+                live_subs.append({
+                    "name": s.get("name"),
+                    "legal_name": s.get("legal_name") or s.get("name"),
+                    "country": s.get("country") or "Global",
+                    "relationship_type": s.get("relationship_type") or "Subsidiary",
+                    "confidence": s.get("confidence") or 0.8
+                })
+
             await websocket.send_json({
                 "stage": stage,
                 "log": log_message,
                 "status": "in_progress",
                 "counts": {
-                    "subsidiaries": len(current_state.get("subsidiaries") or []),
+                    "subsidiaries": len(subs),
                     "sec_results": len(current_state.get("sec_results") or []),
                     "website_results": len(current_state.get("website_results") or []),
                     "search_results": len(current_state.get("search_results") or []),
                     "discovered_documents": len(current_state.get("discovered_documents") or [])
-                }
+                },
+                "live_subsidiaries": live_subs
             })
         except Exception as e:
             logger.error(f"WebSocket send error: {str(e)}")

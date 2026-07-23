@@ -21,6 +21,7 @@ from app.agents.conflict_resolution import conflict_resolution_agent
 from app.agents.relationship_verification import relationship_verification_agent
 from app.agents.confidence_scoring import confidence_scoring_agent
 from app.agents.knowledge_graph_builder import knowledge_graph_builder_agent
+from app.agents.graph_validation import graph_validation_agent
 from app.agents.corporate_hierarchy import corporate_hierarchy_agent
 from app.agents.report_agent import report_agent
 from app.agents.loop_coordinator import loop_coordinator_agent, next_target_preparer_agent, route_discovery_loop
@@ -29,6 +30,10 @@ from app.agents.discovery_strategy_engine import discovery_strategy_engine_agent
 from app.agents.relationship_classification import relationship_classification_agent
 from app.agents.entity_verification import entity_verification_agent
 from app.core.logging import logger
+
+import contextvars
+
+progress_hook_var: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar("progress_hook_var", default=None)
 
 # Required minimum node output contracts
 REQUIRED_OUTPUTS = {
@@ -112,8 +117,14 @@ def resilient_agent_node(node_name: str, timeout: float = 30.0):
 
         @wraps(func)
         async def wrapper(state: AgentState) -> AgentState:
-            # 1. Telemetry Entry
+            # 1. Telemetry Entry & WebSocket Stream Update
             log_stage_counts(f"{node_name}:entry", state)
+            hook = progress_hook_var.get()
+            if hook and callable(hook):
+                try:
+                    await hook(node_name, f"Executing agent node: {node_name}...", state)
+                except Exception:
+                    pass
             
             input_summary = get_metrics_summary(state)
             logger.info(f"[{node_name}] [INPUT] {input_summary}")
@@ -177,13 +188,14 @@ def build_workflow():
     workflow.add_node("relationship_verification", resilient_agent_node("relationship_verification")(relationship_verification_agent))
     workflow.add_node("confidence_scoring", resilient_agent_node("confidence_scoring")(confidence_scoring_agent))
     workflow.add_node("knowledge_graph_builder", resilient_agent_node("knowledge_graph_builder")(knowledge_graph_builder_agent))
+    workflow.add_node("graph_validation", resilient_agent_node("graph_validation")(graph_validation_agent))
     workflow.add_node("corporate_hierarchy", resilient_agent_node("corporate_hierarchy")(corporate_hierarchy_agent))
     workflow.add_node("report_agent", resilient_agent_node("report_agent")(report_agent))
     workflow.add_node("coverage_estimator", resilient_agent_node("coverage_estimator")(coverage_estimator_agent))
     workflow.add_node("discovery_strategy_engine", resilient_agent_node("discovery_strategy_engine")(discovery_strategy_engine_agent))
     workflow.add_node("loop_coordinator", resilient_agent_node("loop_coordinator")(loop_coordinator_agent))
     workflow.add_node("next_target_preparer", resilient_agent_node("next_target_preparer")(next_target_preparer_agent))
-
+    
     workflow.set_entry_point("entity_resolution")
     
     def decide_flow(state: AgentState) -> List[str]:
@@ -211,7 +223,8 @@ def build_workflow():
     workflow.add_edge("conflict_resolution", "relationship_verification")
     workflow.add_edge("relationship_verification", "confidence_scoring")
     workflow.add_edge("confidence_scoring", "knowledge_graph_builder")
-    workflow.add_edge("knowledge_graph_builder", "corporate_hierarchy")
+    workflow.add_edge("knowledge_graph_builder", "graph_validation")
+    workflow.add_edge("graph_validation", "corporate_hierarchy")
     workflow.add_edge("corporate_hierarchy", "report_agent")
     workflow.add_edge("report_agent", "coverage_estimator")
     workflow.add_edge("coverage_estimator", "discovery_strategy_engine")
@@ -266,5 +279,9 @@ async def execute_pipeline(initial_state_or_query: Any, progress_hook: Any = Non
     initial_state.setdefault("warnings", [])
     initial_state.setdefault("errors", [])
 
-    final_state = await graph.ainvoke(initial_state, config)
-    return final_state
+    token = progress_hook_var.set(progress_hook)
+    try:
+        final_state = await graph.ainvoke(initial_state, config)
+        return final_state
+    finally:
+        progress_hook_var.reset(token)

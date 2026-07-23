@@ -88,6 +88,35 @@ export const EvidenceExplorer: React.FC<EvidenceExplorerProps> = ({ entity, onCl
           </div>
         </div>
 
+        {/* Conflict & Review LEDGER */}
+        {entity.conflicts && entity.conflicts.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-rose-700 mb-3 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              Conflict Detection Ledger
+            </h3>
+            <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4 space-y-4">
+              <p className="text-xs text-rose-600 font-medium">Multiple authoritative sources conflict on the following data points:</p>
+              
+              <div className="space-y-3">
+                {entity.conflicts.map((conflict, idx) => (
+                  <div key={idx} className="bg-white border border-rose-100 rounded-lg p-3">
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-rose-500 block mb-2">{conflict.field}</span>
+                    <div className="space-y-1.5">
+                      {conflict.claims.map((claim, cIdx) => (
+                        <div key={cIdx} className="flex justify-between text-xs items-center">
+                          <span className="font-semibold text-slate-900">{claim.value}</span>
+                          <span className="text-slate-500">{claim.source}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Evidence Matrix Logs */}
         <div>
           <h3 className="text-sm font-semibold text-slate-900 mb-3">Supporting Evidence Matrix ({entity.evidences.length})</h3>

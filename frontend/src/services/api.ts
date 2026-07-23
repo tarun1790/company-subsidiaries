@@ -18,6 +18,13 @@ export interface Evidence {
   source_url?: string;
   extracted_text?: string;
   verified_at?: string;
+  source_tier?: number;
+  extraction_confidence?: number;
+}
+
+export interface FieldConflict {
+  field: string;
+  claims: Array<{value: string, source: string}>;
 }
 
 export interface Subsidiary {
@@ -37,6 +44,9 @@ export interface Subsidiary {
   valid_to?: string;
   notes?: string;
   depth?: number;
+  status?: 'Confirmed' | 'Probable' | 'Unverified' | 'Conflicting' | 'Historical' | 'Former' | 'Inactive' | 'Dissolved' | 'Excluded' | 'Unknown';
+  requires_review?: boolean;
+  conflicts?: FieldConflict[];
   evidences: Evidence[];
 }
 
@@ -80,37 +90,57 @@ export interface PipelineMessage {
   log: string;
   status: 'in_progress' | 'complete' | 'failed';
   company_id?: string;
-  company_info?: Record<string, any>;
+  company_info?: any;
   subsidiaries?: Subsidiary[];
-  knowledge_graph?: KnowledgeGraph;
-  reports?: {
-    pdf?: string;
-    excel?: string;
-    csv?: string;
-    json?: string;
+  reports?: any;
+  counts?: {
+    subsidiaries: number;
+    sec_results: number;
+    website_results: number;
+    search_results: number;
+    discovered_documents: number;
   };
+  live_subsidiaries?: Array<{
+    name: string;
+    legal_name?: string;
+    country?: string;
+    relationship_type?: string;
+    confidence?: number;
+  }>;
 }
 
 const isGithubPages = () => {
   return window.location.hostname.includes('github.io');
 };
 
+const ACTIVE_CLOUDFLARE_URL = 'https://every-bath-mercy-attend.trycloudflare.com';
+
 const getBackendUrl = () => {
-  const saved = localStorage.getItem('backend_url');
-  if (saved) return saved;
-  // Always default to http://localhost:8000 for local development or GitHub Pages
   const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  if (isLocal || isGithubPages()) {
+  if (isLocal) {
     return 'http://localhost:8000';
   }
-  return '';
+  const saved = localStorage.getItem('backend_url');
+  if (saved && (saved.includes('loca.lt') || saved.includes('trycloudflare.com'))) {
+    localStorage.removeItem('backend_url');
+  } else if (saved) {
+    return saved;
+  }
+  if (isGithubPages()) {
+    return ACTIVE_CLOUDFLARE_URL;
+  }
+  return ACTIVE_CLOUDFLARE_URL;
+};
+
+const defaultHeaders = {
+  'bypass-tunnel-reminder': 'true'
 };
 
 export const api = {
   async getHistory(): Promise<Company[]> {
     try {
       const base = getBackendUrl();
-      const res = await fetch(`${base}/api/companies/history`);
+      const res = await fetch(`${base}/api/companies/history`, { headers: defaultHeaders });
       if (!res.ok) throw new Error('API server returned an error');
       return await res.json();
     } catch (e) {
@@ -122,7 +152,7 @@ export const api = {
   async clearAllHistory(): Promise<{ message: string }> {
     try {
       const base = getBackendUrl();
-      const res = await fetch(`${base}/api/companies/history/clear`, { method: 'DELETE' });
+      const res = await fetch(`${base}/api/companies/history/clear`, { method: 'DELETE', headers: defaultHeaders });
       if (!res.ok) throw new Error('Failed to clear audit history');
       return await res.json();
     } catch (e) {
@@ -134,7 +164,7 @@ export const api = {
   async deleteCompanyAudit(id: string): Promise<{ message: string }> {
     try {
       const base = getBackendUrl();
-      const res = await fetch(`${base}/api/companies/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${base}/api/companies/${id}`, { method: 'DELETE', headers: defaultHeaders });
       if (!res.ok) throw new Error('Failed to delete company audit');
       return await res.json();
     } catch (e) {
@@ -146,7 +176,7 @@ export const api = {
   async getCompanyDetails(id: string): Promise<CompanyDetails> {
     try {
       const base = getBackendUrl();
-      const res = await fetch(`${base}/api/companies/${id}`);
+      const res = await fetch(`${base}/api/companies/${id}`, { headers: defaultHeaders });
       if (!res.ok) throw new Error('API server returned an error');
       return await res.json();
     } catch (e) {
@@ -160,7 +190,7 @@ export const api = {
       const base = getBackendUrl();
       const res = await fetch(`${base}/api/companies/pipeline/${encodeURIComponent(query)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...defaultHeaders }
       });
       if (!res.ok) throw new Error('HTTP pipeline execution failed');
       return await res.json();

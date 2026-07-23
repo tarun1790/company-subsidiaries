@@ -15,7 +15,20 @@ async def sec_filings_agent(state: AgentState) -> AgentState:
     legal_name = company_info.get("legal_name") or state["query"]
     
     if not cik:
-        logs.append("Skipping SEC EDGAR searches (No CIK code resolved).")
+        logs.append("CIK missing from Entity Resolution. Attempting fallback CIK resolution via search plan...")
+        search_plan = company_info.get("search_plan", [legal_name])
+        for plan_term in search_plan:
+            try:
+                res = await sec_client.get_cik_by_name_or_ticker(plan_term)
+                if res and res != "Not found" and not str(res).startswith("SEC lookup"):
+                    cik = res
+                    logs.append(f"Fallback successful: Found CIK {cik} for term '{plan_term}'")
+                    break
+            except Exception:
+                continue
+                
+    if not cik:
+        logs.append("Skipping SEC EDGAR searches (No CIK code resolved after fallback attempts).")
         return {
             "sec_results": [],
             "logs": logs

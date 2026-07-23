@@ -1,13 +1,34 @@
 {
-  "max_iterations": 2,
-  "max_depth": 2,
-  "no_new_entities_streak_threshold": 1,
-  "coverage_threshold": 0.90,
-  "timeouts": {
-    "entity_resolution": 30.0,
-    "collectors": 20.0,
-    "structured_extraction": 30.0,
-    "default": 30.0
+  "default_mode": "enterprise_audit",
+  "modes": {
+    "fast_preview": {
+      "max_iterations": 2,
+      "max_depth": 2,
+      "no_new_entities_streak_threshold": 1,
+      "zero_drop_policy": true,
+      "preserve_excluded_candidates": true,
+      "min_confidence_for_recursive_expansion": 0.75
+    },
+    "enterprise_audit": {
+      "max_iterations": 8,
+      "max_depth": 3,
+      "no_new_entities_streak_threshold": 2,
+      "zero_drop_policy": true,
+      "preserve_excluded_candidates": true,
+      "preserve_conflicts": true,
+      "enable_cycle_detection": true,
+      "min_confidence_for_recursive_expansion": 0.70
+    },
+    "forensic_deep_dive": {
+      "max_iterations": 25,
+      "max_depth": 10,
+      "no_new_entities_streak_threshold": 5,
+      "zero_drop_policy": true,
+      "preserve_excluded_candidates": true,
+      "preserve_conflicts": true,
+      "enable_cycle_detection": true,
+      "min_confidence_for_recursive_expansion": 0.5
+    }
   },
   "source_priorities": {
     "SEC Filings": 1.0,

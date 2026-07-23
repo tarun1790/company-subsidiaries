@@ -5,12 +5,16 @@ from app.core.logging import logger
 
 # Calibrated Dynamic Source Reliability Weights (Adaptive Bayesian Model)
 CALIBRATED_SOURCE_RELIABILITY = {
-    "sec_edgar": 0.98,
-    "annual_report": 0.94,
-    "public_registry": 0.91,
-    "official_website": 0.90,
-    "web_research": 0.62,
-    "default": 0.50
+    "sec_edgar": 0.95,
+    "annual_report": 0.95,
+    "mca": 0.90,
+    "gleif": 0.90,
+    "public_registry": 0.88,
+    "official_website": 0.85,
+    "wikipedia": 0.70,
+    "web_research": 0.45,
+    "single_snippet": 0.35,
+    "default": 0.35
 }
 
 def get_calibrated_authority(source_type: str) -> float:
@@ -18,93 +22,69 @@ def get_calibrated_authority(source_type: str) -> float:
     src = (source_type or "").lower()
     if any(k in src for k in ["sec", "edgar", "exhibit 21"]):
         return CALIBRATED_SOURCE_RELIABILITY["sec_edgar"]
-    elif any(k in src for k in ["annual report", "pdf"]):
+    elif any(k in src for k in ["annual report", "pdf", "10-k"]):
         return CALIBRATED_SOURCE_RELIABILITY["annual_report"]
-    elif any(k in src for k in ["companies house", "registry", "lei", "gleif"]):
+    elif "mca" in src:
+        return CALIBRATED_SOURCE_RELIABILITY["mca"]
+    elif "gleif" in src or "lei" in src:
+        return CALIBRATED_SOURCE_RELIABILITY["gleif"]
+    elif any(k in src for k in ["companies house", "registry", "opencorporates"]):
         return CALIBRATED_SOURCE_RELIABILITY["public_registry"]
-    elif any(k in src for k in ["official website", "investor"]):
+    elif any(k in src for k in ["official website", "investor", "domain"]):
         return CALIBRATED_SOURCE_RELIABILITY["official_website"]
+    elif "wikipedia" in src:
+        return CALIBRATED_SOURCE_RELIABILITY["wikipedia"]
     elif any(k in src for k in ["web research", "news", "search"]):
         return CALIBRATED_SOURCE_RELIABILITY["web_research"]
     return CALIBRATED_SOURCE_RELIABILITY["default"]
 
 def calculate_9_factor_confidence(sub: Dict[str, Any]) -> float:
-    """Calculates mathematical 9-factor confidence score with dynamic source calibration:
-    
-    Confidence = min(1.0, max(0.0, sum(w_i * S_i) - P_conflict))
-    """
+    """Calculates mathematical confidence score based on source credibility tiers."""
     evidences = sub.get("evidences") or []
-    
-    # 1. Dynamic Calibrated Source Authority
-    authority_scores = [get_calibrated_authority(ev.get("source_type", "")) for ev in evidences]
-    s_authority = max(authority_scores) if authority_scores else CALIBRATED_SOURCE_RELIABILITY["default"]
-    
-    # 2. Recency
-    s_recency = 1.0
-    
-    # 3. Specificity
-    s_specificity = 0.8
-    if any("exhibit 21" in (ev.get("extracted_text") or "").lower() or "table" in (ev.get("source_type") or "").lower() for ev in evidences):
-        s_specificity = 1.0
+    if not evidences:
+        return 0.35
         
-    # 4. Corroboration Count
+    authority_scores = [get_calibrated_authority(ev.get("source_type", "")) for ev in evidences]
+    max_authority = max(authority_scores)
+    
     unique_sources = set(ev.get("source_type") for ev in evidences if ev.get("source_type"))
-    src_count = max(1, len(unique_sources))
-    s_corroboration = 1.0 - math.exp(-0.5 * (src_count - 1))
+    src_count = len(unique_sources)
     
-    # 5. Extraction Precision
-    s_ext_conf = float(sub.get("confidence") or 0.85)
-    if s_ext_conf > 1.0:
-        s_ext_conf = s_ext_conf / 100.0
-    s_ext_conf = max(0.0, min(1.0, s_ext_conf))
-    
-    # 6. Resolution Precision
-    s_res_conf = 1.0 if sub.get("registration_number") or sub.get("cik") or s_authority >= 0.90 else 0.85
-    
-    # 7. Classification Match
-    rel = (sub.get("relationship_type") or "").lower()
-    s_class_conf = 1.0 if rel in ["subsidiary", "direct subsidiary", "wholly owned subsidiary", "brand", "joint venture"] else 0.75
-    
-    # 8. Temporal Match
-    s_temp_conf = 1.0 if sub.get("valid_from") else 0.70
-    
-    # 9. Conflict Penalty
-    p_conflict = 0.25 if sub.get("is_conflicting") else 0.0
-    
-    # Weighted Sum using Calibrated Authority
-    weighted_score = (
-        (0.25 * s_authority) +
-        (0.10 * s_recency) +
-        (0.15 * s_specificity) +
-        (0.15 * s_corroboration) +
-        (0.10 * s_ext_conf) +
-        (0.10 * s_res_conf) +
-        (0.08 * s_class_conf) +
-        (0.07 * s_temp_conf)
-    ) - p_conflict
-    
-    final_score = round(max(0.0, min(1.0, weighted_score)), 4)
-    return final_score
+    # Multi-source boost: Tier 1 + Official Website / MCA -> 95%+
+    if src_count >= 2 and max_authority >= 0.85:
+        final_score = min(0.98, max_authority + 0.05)
+    elif max_authority >= 0.85:
+        final_score = max_authority
+    elif max_authority >= 0.70:
+        final_score = 0.70 if src_count == 1 else 0.78
+    elif src_count == 1 and max_authority <= 0.45:
+        final_score = 0.35
+    else:
+        final_score = max_authority
+        
+    return round(final_score, 2)
 
 async def confidence_scoring_agent(state: AgentState) -> AgentState:
-    """Agent Stage 21: Evaluates 9-factor mathematical confidence scoring with dynamic calibration."""
+    """Agent Stage 21: Evaluates dynamic multi-tiered confidence scoring and filters out noise."""
     subs = state.get("subsidiaries", [])
     logs = state.get("logs", [])
     
-    logs.append("Running Calibrated 9-Factor Mathematical Confidence Scoring Agent...")
+    logs.append("Running Dynamic Multi-Tiered Confidence Scoring Agent...")
     
     scored_subs = []
     for sub in subs:
         score = calculate_9_factor_confidence(sub)
         
+        # Discard low-confidence single-snippet noise items (< 40%)
+        if score < 0.40:
+            continue
+            
         if score >= 0.85:
-            band = "High / Confirmed"
+            band = "Confirmed"
         elif score >= 0.65:
-            band = "Medium / Probable"
-        elif score >= 0.40:
-            band = "Low / Unverified"
+            band = "Probable"
         else:
-            band = "Unverified Candidate"
+            band = "Unverified"
 
         scored_subs.append({
             **sub,
@@ -112,7 +92,7 @@ async def confidence_scoring_agent(state: AgentState) -> AgentState:
             "confidence_band": band
         })
 
-    logs.append(f"Dynamic confidence scoring completed for {len(scored_subs)} entities.")
+    logs.append(f"Dynamic confidence scoring completed. Retained {len(scored_subs)} verified entities (filtered out noise).")
     return {
         **state,
         "subsidiaries": scored_subs,

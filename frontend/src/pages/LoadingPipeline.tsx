@@ -6,6 +6,7 @@ interface LoadingPipelineProps {
   stageLogs: string[];
   currentStage: string;
   status: 'in_progress' | 'complete' | 'failed';
+  liveSubsidiaries?: Array<{ name: string; legal_name?: string; country?: string; relationship_type?: string; confidence?: number; }>;
 }
 
 interface StepItem {
@@ -25,7 +26,7 @@ const PIPELINE_STEPS: StepItem[] = [
   { id: 'report_agent', label: 'Rendering PDF & Data Reports' },
 ];
 
-export const LoadingPipeline: React.FC<LoadingPipelineProps> = ({ query, stageLogs, currentStage, status }) => {
+export const LoadingPipeline: React.FC<LoadingPipelineProps> = ({ query, stageLogs, currentStage, status, liveSubsidiaries = [] }) => {
   const logEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll logs
@@ -131,6 +132,50 @@ export const LoadingPipeline: React.FC<LoadingPipelineProps> = ({ query, stageLo
           </div>
         </div>
 
+      </div>
+
+      {/* Live Discovered Subsidiaries Real-Time Stream */}
+      <div className="mt-8 bg-white border border-slate-200/80 rounded-2xl p-6 shadow-lg">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+          <div>
+            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <span className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              </span>
+              Live Subsidiary Tracking Stream
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Entities discovered and extracted in real-time as the agents query SEC filers and web sources
+            </p>
+          </div>
+          <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold rounded-full">
+            {liveSubsidiaries.length} Discovered
+          </span>
+        </div>
+
+        {liveSubsidiaries.length === 0 ? (
+          <div className="text-center py-8 text-slate-400 text-sm italic">
+            Scanning public registries & SEC filings... Entities will populate here second-by-second.
+          </div>
+        ) : (
+          <div className="max-h-64 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-3 pr-2 scrollbar-thin">
+            {liveSubsidiaries.map((sub, idx) => (
+              <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200/60 rounded-xl hover:border-brand-300 transition-all shadow-2xs">
+                <div className="truncate pr-2">
+                  <div className="text-sm font-semibold text-slate-800 truncate">{sub.name}</div>
+                  <div className="text-xs text-slate-500 truncate">{sub.legal_name || sub.name}</div>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-semibold rounded-md border border-blue-100">
+                    {sub.country || 'Global'}
+                  </span>
+                  <div className="text-[10px] text-slate-400 mt-1">{sub.relationship_type || 'Subsidiary'}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
     </div>

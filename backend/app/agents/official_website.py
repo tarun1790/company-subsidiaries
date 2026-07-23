@@ -55,40 +55,45 @@ async def official_website_agent(state: AgentState) -> AgentState:
             "You are an expert financial analyst auditing corporate subsidiaries.\n"
             "Given the page text scraped from a company website, extract any subsidiaries, holding companies, joint ventures, divisions, or brands.\n"
             "Include country, ownership (if mentioned), relationship type, and the exact supporting quote.\n"
-            "Be highly conservative: do not extract random client names, partners, or technologies as subsidiaries."
+            "CRITICAL RULES FOR EXTRACTION:\n"
+            "1. Be highly conservative: do not extract random client names, partners, or technologies as subsidiaries.\n"
+            "2. DO extract digital properties and websites (e.g. 'kompas.com', 'kompas.id', 'tribunnews.com') if they are core brands or business units owned by the parent.\n"
+            "3. DO NOT extract external companies (e.g. 'News Corporation', 'The New York Times Company') mentioned for reference.\n"
+            "4. DO NOT extract sentence fragments (e.g. 'owned by...', 'has dominated...'). Extract ONLY the proper noun name of the entity.\n"
+            "5. If a name looks like a parsing error or gibberish, ignore it entirely."
         )
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
-            ("user", "Company Name: {company}\nSource URL: {url}\n\nPage Text:\n{text}")
+            ("user", "Brand Name / Alias: {brand}\nLegal Company Name: {company}\nSource URL: {url}\n\nPage Text:\n{text}")
         ])
 
-        for url in urls_to_scrape:
-            logs.append(f"Scraping page: {url}...")
-            text = await scraper.scrape_url(url, use_browser=True)
-            if not text or len(text.strip()) < 100:
-                continue
-
-            # Limit text size to prevent LLM context errors
-            shortened_text = text[:15000]
-            
+        async def process_page(url: str):
             try:
+                logs.append(f"Scraping page concurrently: {url}...")
+                text = await scraper.scrape_url(url, use_browser=True)
+                if not text or len(text.strip()) < 100:
+                    return []
+
+                shortened_text = text[:15000]
                 chain = prompt | structured_llm
                 result = await chain.ainvoke({
+                    "brand": state["query"],
                     "company": legal_name,
                     "url": url,
                     "text": shortened_text
                 })
                 
+                page_results = []
                 for entity in result.entities:
-                    discovered.append({
+                    page_results.append({
                         "name": entity.name,
                         "legal_name": entity.name,
                         "country": entity.country,
                         "ownership": entity.ownership,
                         "parent": legal_name,
                         "relationship_type": entity.relationship_type,
-                        "confidence": 0.85, # high confidence from official website
+                        "confidence": 0.85,
                         "evidences": [{
                             "source_type": "Official Website",
                             "source_url": url,
@@ -96,8 +101,16 @@ async def official_website_agent(state: AgentState) -> AgentState:
                         }],
                         "notes": "Discovered via official website corporate portal crawling."
                     })
+                return page_results
             except Exception as le:
                 logger.error(f"Error executing LLM extraction on page {url}: {str(le)}")
+                return []
+
+        import asyncio
+        page_tasks = [process_page(url) for url in urls_to_scrape]
+        results_lists = await asyncio.gather(*page_tasks)
+        for r_list in results_lists:
+            discovered.extend(r_list)
                 
         logs.append(f"Extracted {len(discovered)} potential entities from official website pages.")
         return {

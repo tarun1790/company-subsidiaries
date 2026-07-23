@@ -32,7 +32,8 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
     
     for sub in subs:
         raw_name = sub.get("name", "").strip()
-        if not CostOptimizer.is_valid_entity_name(raw_name, parent_name):
+        cand = CostOptimizer.classify_entity_candidate(raw_name, parent_name)
+        if cand.status == "Excluded":
             continue
         base_key = get_base_name_key(raw_name)
         if base_key not in grouped:
@@ -43,8 +44,17 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
     for base_key, items in grouped.items():
         # Pick the most complete/formal legal name as the canonical representative
         canonical_item = max(items, key=lambda x: len(x.get("name", "")))
-        canonical_name = canonical_item["name"]
+        raw_canonical = canonical_item["name"]
         
+        # Sanitize canonical name
+        clean_canonical = CostOptimizer.sanitize_and_clean_entity_name(raw_canonical, parent_name)
+        if not clean_canonical:
+            continue
+            
+        # Reject if canonical matches parent company
+        if clean_canonical.lower().strip() == parent_name.lower().strip():
+            continue
+
         # Merge all evidences across grouped items
         evidences = []
         seen_ev = set()
@@ -61,8 +71,8 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
         confidence = max(float(it.get("confidence") or 0.80) for it in items)
 
         normalized_subs.append({
-            "name": canonical_name,
-            "legal_name": canonical_name,
+            "name": clean_canonical,
+            "legal_name": clean_canonical,
             "country": country,
             "ownership": ownership,
             "relationship_type": relationship_type,
