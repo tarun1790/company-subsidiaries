@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { CompanyDetails, Subsidiary } from '../services/api';
+import { CompanyDetails, Subsidiary, getBackendUrl } from '../services/api';
 import { CorporateTree } from '../components/CorporateTree';
+import { TreeGraph } from '../components/TreeGraph';
 import { EvidenceExplorer } from '../components/EvidenceExplorer';
 import { 
   Building2, Globe, FileDown, TreeDeciduous, 
@@ -115,12 +116,34 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
           </div>
         </div>
 
-        <button
-          onClick={onNewSearch}
-          className="rounded-xl border border-slate-200 hover:bg-slate-50 px-4.5 py-2.5 text-sm font-semibold text-slate-700 transition-all text-center"
-        >
-          New Audit
-        </button>
+        <div className="flex items-center gap-3">
+          {reports?.pdf && (
+            <a 
+              href={`${getBackendUrl()}${reports.pdf}`} 
+              target="_blank" 
+              rel="noreferrer"
+              className="flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 px-4 py-2 text-sm font-semibold text-white transition-all shadow-sm"
+            >
+              <FileDown className="h-4 w-4" /> PDF Report
+            </a>
+          )}
+          {reports?.excel && (
+            <a 
+              href={`${getBackendUrl()}${reports.excel}`} 
+              target="_blank" 
+              rel="noreferrer"
+              className="flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition-all shadow-sm"
+            >
+              <FileDown className="h-4 w-4" /> Excel
+            </a>
+          )}
+          <button
+            onClick={onNewSearch}
+            className="rounded-xl border border-slate-200 hover:bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 transition-all"
+          >
+            New Audit
+          </button>
+        </div>
       </div>
 
       {/* Tabs list */}
@@ -263,6 +286,13 @@ export const Results: React.FC<ResultsProps> = ({ details, onNewSearch }) => {
               subsidiaries={subsidiaries}
               onSelectEntity={setSelectedEntity}
             />
+            
+            <div className="pt-6">
+              <TreeGraph
+                parentName={company.legal_name || company.query_name}
+                subsidiaries={subsidiaries}
+              />
+            </div>
           </div>
         )}
 

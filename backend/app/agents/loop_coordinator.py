@@ -66,9 +66,9 @@ async def loop_coordinator_agent(state: AgentState) -> AgentState:
         if name_lower in suffixes or len(name_lower) < 3:
             continue
             
-        # Only queue verified and high-confidence entities (confidence >= 80%) for recursive discovery
+        # Queue all valid discovered entities (confidence >= 50%) for multi-tier discovery
         confidence = sub.get("confidence", 0.0)
-        if confidence < 0.80:
+        if confidence < 0.50:
             continue
             
         # Determine priority based on discovery source weights

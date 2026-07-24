@@ -37,42 +37,33 @@ async def web_research_agent(state: AgentState) -> AgentState:
     
     original_query = state["company_info"].get("original_query") or state["query"]
     
-    # 1. Search Wikipedia (LangChain Community Tool with caching)
+    # 1. Search Wikipedia natively via python wikipedia API
     try:
-        import asyncio
-        from app.core.redis_cache import cache_manager
+        import wikipedia
+        logs.append("Invoking direct Wikipedia API search...")
         
-        async def run_wikipedia_cached(q: str, tool) -> str:
-            cache_key = f"wiki:{q}"
-            cached = await cache_manager.get(cache_key)
-            if cached:
-                return cached
-            loop = asyncio.get_running_loop()
-            res = await loop.run_in_executor(None, tool.run, q)
-            if res:
-                await cache_manager.set(cache_key, res, expire=86400)
-            return res
-
-        logs.append("Invoking Wikipedia search queries...")
-        wiki = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
-        
-        # Wikipedia: Brand name, parent, aliases
-        wiki_queries = [
-            f"{legal_name}",
-            f"{original_query}"
-        ]
-        
-        # If the company_info has a known parent, search that too
+        wiki_queries = [legal_name, original_query]
         if company_info.get("parent"):
             wiki_queries.append(company_info["parent"])
-            
-        # Deduplicate and clean queries
         wiki_queries = list(set([q.strip() for q in wiki_queries if q.strip()]))
 
         for wq in wiki_queries:
-            wiki_res = await run_wikipedia_cached(wq, wiki)
-            if wiki_res and "No good Wikipedia page found" not in wiki_res:
-                search_context += f"--- WIKIPEDIA ENTRY ({wq}) ---\n{wiki_res}\n\n"
+            try:
+                loop = asyncio.get_running_loop()
+                # Fetch summary first
+                summary = await loop.run_in_executor(None, lambda: wikipedia.summary(wq, auto_suggest=True))
+                if summary:
+                    search_context += f"--- WIKIPEDIA ENTRY ({wq}) ---\n{summary}\n\n"
+                    
+                # Try fetching full page content for subsidiary lists
+                try:
+                    page = await loop.run_in_executor(None, lambda: wikipedia.page(wq, auto_suggest=False))
+                    if page and page.content:
+                        search_context += f"--- WIKIPEDIA FULL PAGE ({wq}) ---\n{page.content[:15000]}\n\n"
+                except Exception:
+                    pass
+            except Exception as w_ex:
+                logger.debug(f"Wikipedia lookup for '{wq}' failed: {w_ex}")
     except Exception as e:
         logger.warning(f"Wikipedia search error: {str(e)}")
 
@@ -119,24 +110,24 @@ async def web_research_agent(state: AgentState) -> AgentState:
             
         async def fetch_sq(sq: str):
             logs.append(f"Executing web research query concurrently: '{sq}'...")
-            res = await run_ddg_cached(sq)
-            return f"--- WEB SEARCH ({sq}) ---\n{res}\n\n" if res else ""
+            try:
+                res = await run_ddg_cached(sq)
+                return f"--- WEB SEARCH ({sq}) ---\n{res}\n\n" if res else ""
+            except Exception as e:
+                logger.warning(f"Web search engine failed for '{sq}': {str(e)}")
+                return ""
 
         sq_tasks = [fetch_sq(sq) for sq in search_queries]
-        sq_results = await asyncio.gather(*sq_tasks)
+        sq_results = await asyncio.gather(*sq_tasks, return_exceptions=True)
         for res_str in sq_results:
-            search_context += res_str
+            if isinstance(res_str, str) and res_str:
+                search_context += res_str
     except Exception as se:
         logger.warning(f"Web search error: {str(se)}")
 
-    # 4. Fast Extraction + Structured LLM Extraction for Brands & Subsidiaries
-    if len(search_context.strip()) > 100:
+    # 4. Structured LLM Extraction for Brands & Subsidiaries
+    if len(search_context.strip()) > 20:
         try:
-            # Fast extraction via CostOptimizer
-            from app.agents.cost_optimizer import CostOptimizer
-            fast_entities, _ = CostOptimizer.fast_extract_entities_from_text(search_context, legal_name)
-            discovered.extend(fast_entities)
-            
             # Structured LLM Extraction to capture operating brands (Myntra, Cleartrip, eKart, Shopsy, etc.)
             llm = get_llm(capability="classification")
             structured_llm = llm.with_structured_output(WebResearchOutput)
@@ -159,27 +150,80 @@ async def web_research_agent(state: AgentState) -> AgentState:
             ])
             
             chain = prompt | structured_llm
-            result = await chain.ainvoke({
-                "company": legal_name,
-                "context": search_context[:25000]
-            })
-            
-            for entity in result.entities:
-                discovered.append({
-                    "name": entity.name,
-                    "legal_name": entity.name,
-                    "country": entity.country,
-                    "ownership": entity.ownership or "Not Publicly Disclosed",
-                    "parent": legal_name,
-                    "relationship_type": entity.relationship_type or "Brand",
-                    "confidence": 0.85 if any(b in entity.name.lower() for b in ["myntra", "cleartrip", "ekart", "shopsy", "health", "wholesale", "ans commerce"]) else (0.65 if "wikipedia" in entity.source_citation.lower() else 0.50),
-                    "evidences": [{
-                        "source_type": "Web Research",
-                        "source_url": "Search-based details.",
-                        "extracted_text": f"Source: {entity.source_citation}. Quote: {entity.evidence_snippet}"
-                    }],
-                    "notes": f"Discovered via web research. Source: {entity.source_citation}"
+            result = None
+            try:
+                result = await chain.ainvoke({
+                    "company": legal_name,
+                    "context": search_context[:25000]
                 })
+            except Exception as st_err:
+                logger.warning(f"Structured LLM failed, falling back to raw JSON parsing: {st_err}")
+
+            # Fallback if with_structured_output returned 0 entities (typical for local ChatOllama)
+            if not result or not result.entities:
+                logger.info("Structured output returned 0 entities. Running raw JSON extraction fallback...")
+                json_prompt = (
+                    f"{system_prompt}\n\n"
+                    "Return ONLY a valid JSON object with key 'entities' containing a list of objects with fields: name, country, relationship_type, source_citation, evidence_snippet.\n\n"
+                    f"Primary Company: {legal_name}\nResearch Context:\n{search_context[:15000]}\n\nJSON:"
+                )
+                raw_res = await llm.ainvoke(json_prompt)
+                raw_text = raw_res.content if hasattr(raw_res, 'content') else str(raw_res)
+                
+                import json
+                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                if match:
+                    try:
+                        parsed_json = json.loads(match.group(0))
+                        ent_list = parsed_json.get("entities") or parsed_json.get("subsidiaries") or []
+                        for item in ent_list:
+                            if isinstance(item, str):
+                                item_name = item
+                                item_country = "Global"
+                                item_rel = "Brand"
+                            elif isinstance(item, dict):
+                                item_name = item.get("name") or item.get("subsidiary")
+                                item_country = item.get("country") or "Global"
+                                item_rel = item.get("relationship_type") or "Brand"
+                            else:
+                                continue
+                                
+                            if item_name:
+                                discovered.append({
+                                    "name": item_name,
+                                    "legal_name": item_name,
+                                    "country": item_country,
+                                    "ownership": "Not Publicly Disclosed",
+                                    "parent": legal_name,
+                                    "relationship_type": item_rel,
+                                    "confidence": 0.70,
+                                    "evidences": [{
+                                        "source_type": "Web Research",
+                                        "source_url": "Search-based details.",
+                                        "extracted_text": f"Discovered via web research for {legal_name}."
+                                    }],
+                                    "notes": f"Discovered via raw JSON web research."
+                                })
+                    except Exception as pe:
+                        logger.warning(f"Failed to parse raw JSON from Ollama: {pe}")
+
+            if result and result.entities:
+                for entity in result.entities:
+                    discovered.append({
+                        "name": entity.name,
+                        "legal_name": entity.name,
+                        "country": entity.country,
+                        "ownership": entity.ownership or "Not Publicly Disclosed",
+                        "parent": legal_name,
+                        "relationship_type": entity.relationship_type or "Brand",
+                        "confidence": 0.85 if any(b in entity.name.lower() for b in ["myntra", "cleartrip", "ekart", "shopsy", "health", "wholesale", "ans commerce"]) else (0.65 if "wikipedia" in entity.source_citation.lower() else 0.50),
+                        "evidences": [{
+                            "source_type": "Web Research",
+                            "source_url": "Search-based details.",
+                            "extracted_text": f"Source: {entity.source_citation}. Quote: {entity.evidence_snippet}"
+                        }],
+                        "notes": f"Discovered via web research. Source: {entity.source_citation}"
+                    })
                 
         except Exception as e:
             error_msg = f"Web research extraction parsing error: {str(e)}"

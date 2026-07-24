@@ -89,6 +89,13 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     logger.info(f"Initiating Entity Resolution for query: {query}")
     
     query_lower = query.lower().strip()
+    
+    # Domain / URL cleaning (e.g. "netflix.com" -> "netflix")
+    clean_q = re.sub(r'^(?:https?://)?(?:www\.)?', '', query_lower, flags=re.IGNORECASE)
+    clean_q = re.sub(r'\.(?:com|org|net|io|co|in|ai|gov|edu|uk|ca|de|fr|br|jp|kr)$', '', clean_q, flags=re.IGNORECASE).strip()
+    if clean_q and len(clean_q) >= 2:
+        query_lower = clean_q
+        
     cache_key = f"er_canonical_v4:{query_lower}"
 
     # Stage 0: Cache Check
@@ -114,17 +121,31 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
         llm = get_llm(capability="entity_resolution")
         intel_llm = llm.with_structured_output(EntityIntelligence)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a corporate intelligence engine. Identify if the input is a brand/subsidiary, resolve its ultimate parent company, find its official domain, and identify its public stock ticker if it has one."),
+            ("system", "You are a corporate intelligence engine. Identify if the input is a brand, subsidiary, or short name. Resolve it to its true, full legal registered corporate parent company name (e.g., 'kompas' -> 'Kompas Gramedia Group' or 'PT Kompas Media Nusantara'). Find its official domain, and identify its public stock ticker if it has one."),
             ("user", "Query: {query}")
         ])
         try:
             res = await (prompt | intel_llm).ainvoke({"query": query})
-            if res.is_brand_or_subsidiary and res.resolved_parent:
+            if res and res.is_brand_or_subsidiary and res.resolved_parent:
                 parent_name = res.resolved_parent
+                domain = res.domain
+                ticker = res.ticker
             else:
-                parent_name = query
-            domain = res.domain
-            ticker = res.ticker
+                # Raw JSON fallback for ChatOllama
+                raw_p = (
+                    "You are a corporate intelligence engine. Return ONLY a valid JSON object with keys: 'resolved_parent' (string), 'domain' (string), 'ticker' (string).\n"
+                    f"Query: {query}\nJSON:"
+                )
+                raw_res = await llm.ainvoke(raw_p)
+                raw_text = raw_res.content if hasattr(raw_res, 'content') else str(raw_res)
+                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                if match:
+                    pj = json.loads(match.group(0))
+                    parent_name = pj.get("resolved_parent") or query
+                    domain = pj.get("domain")
+                    ticker = pj.get("ticker")
+                else:
+                    parent_name = query
             logs.append(f"Detection Results -> Target: {parent_name}, Domain: {domain}, Ticker: {ticker}")
         except Exception as e:
             logger.warning(f"Detection LLM failed: {e}")

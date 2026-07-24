@@ -5,6 +5,7 @@ import { LoadingPipeline } from './pages/LoadingPipeline';
 import { Results } from './pages/Results';
 import { HistoryPage } from './pages/History';
 import { SettingsPage } from './pages/Settings';
+import { DiscoveryTicker } from './components/DiscoveryTicker';
 import { api, CompanyDetails, PipelineMessage } from './services/api';
 
 type Page = 'search' | 'history' | 'settings';
@@ -41,8 +42,12 @@ export const App: React.FC = () => {
 
     // 2. Connect to WebSocket pipeline stream
     let ws: WebSocket | null = null;
+    let hasReceivedMessage = false;
+    let watchdogTimer: any = null;
     
     const handleMessage = (msg: PipelineMessage) => {
+      hasReceivedMessage = true;
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       setPipelineState((prev) => {
         // Build running logs list
         const nextLogs = [...prev.stageLogs];
@@ -108,22 +113,47 @@ export const App: React.FC = () => {
     };
 
     const handleError = async (err: any) => {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       console.warn("WS Pipeline notice/error, switching to HTTP audit runner fallback: ", err);
-      setPipelineState((prev) => ({
-        ...prev,
-        stageLogs: [...prev.stageLogs, "WebSocket closed. Executing synchronous HTTP pipeline fallback..."]
-      }));
+      
+      const stages = [
+        { stage: 'entity_resolution', log: 'Resolving canonical company entity...' },
+        { stage: 'sec_filings', log: 'Querying SEC EDGAR Exhibit 21 database...' },
+        { stage: 'official_website', log: 'Crawling corporate domain & investor portals...' },
+        { stage: 'public_registry', log: 'Searching statutory registries (GLEIF, OpenCorporates)...' },
+        { stage: 'web_research', log: 'Running multi-engine web research for brands & acquisitions...' },
+        { stage: 'doc_extraction', log: 'Parsing annual report PDF documents...' },
+        { stage: 'verification', log: 'Fusing evidence & calculating dynamic confidence scores...' },
+        { stage: 'corporate_hierarchy', log: 'Assembling corporate hierarchy tree...' },
+        { stage: 'report_agent', log: 'Compiling audit reports...' }
+      ];
+
+      let stepIdx = 0;
+      const progressInterval = setInterval(() => {
+        if (stepIdx < stages.length) {
+          const item = stages[stepIdx];
+          setPipelineState((prev) => ({
+            ...prev,
+            currentStage: item.stage,
+            stageLogs: [...prev.stageLogs, item.log]
+          }));
+          stepIdx++;
+        }
+      }, 1500);
+
       try {
         const details = await api.runPipelineHTTP(query);
+        clearInterval(progressInterval);
         setPipelineState({
           query: details.company.legal_name || query,
-          stageLogs: ["HTTP pipeline audit completed successfully."],
+          stageLogs: ["HTTP audit completed successfully. Rendering corporate intelligence graph..."],
           currentStage: "done",
           status: 'complete',
           results: details,
           liveSubsidiaries: []
         });
       } catch (httpErr: any) {
+        clearInterval(progressInterval);
         console.error("HTTP Pipeline fallback failed: ", httpErr);
         setPipelineState((prev) => ({
           ...prev,
@@ -134,11 +164,23 @@ export const App: React.FC = () => {
     };
 
     const handleClose = () => {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       console.log("WS Pipeline closed.");
     };
 
     try {
       ws = api.connectPipelineWS(query, handleMessage, handleError, handleClose);
+      
+      // Watchdog: If no message is received within 4 seconds, close WS & fallback to HTTP runner
+      watchdogTimer = setTimeout(() => {
+        if (!hasReceivedMessage) {
+          console.warn("[App] WebSocket connection watchdog triggered (no response after 4s). Falling back to HTTP runner.");
+          if (ws) {
+            try { ws.close(); } catch (e) {}
+          }
+          handleError(new Error("WebSocket connection timeout (4s limit exceeded)"));
+        }
+      }, 4000);
     } catch (err: any) {
       setPipelineState((prev) => ({
         ...prev,
@@ -234,6 +276,18 @@ export const App: React.FC = () => {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50/20">
       <Navbar currentPage={currentPage} setCurrentPage={setCurrentPage} />
+      
+      {/* Show live ticker if there are any subsidiaries */}
+      {(pipelineState.liveSubsidiaries.length > 0 || (pipelineState.results && pipelineState.results.subsidiaries.length > 0)) && (
+        <DiscoveryTicker 
+          subsidiaries={
+            pipelineState.status === 'complete' && pipelineState.results 
+              ? pipelineState.results.subsidiaries 
+              : pipelineState.liveSubsidiaries
+          } 
+        />
+      )}
+
       <main className="flex-1">
         {renderContent()}
       </main>

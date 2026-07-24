@@ -51,22 +51,22 @@ async def entity_normalization_agent(state: AgentState) -> AgentState:
         if not clean_canonical:
             continue
             
-        # Reject if canonical matches parent company
-        if clean_canonical.lower().strip() == parent_name.lower().strip():
-            continue
+        # Mark as Primary Entity if it matches the parent company
+        is_primary = clean_canonical.lower().strip() == parent_name.lower().strip()
 
         # Merge all evidences across grouped items
         evidences = []
         seen_ev = set()
         for it in items:
             for ev in it.get("evidences", []):
-                ev_key = f"{ev.get('source_type')}:{ev.get('source_url')}"
-                if ev_key not in seen_ev:
-                    seen_ev.add(ev_key)
+                # Use extracted_text to ensure unique evidence snippets from the same source aren't discarded
+                ev_text = ev.get('extracted_text') or ev.get('source_url') or str(ev)
+                if ev_text not in seen_ev:
+                    seen_ev.add(ev_text)
                     evidences.append(ev)
                     
         country = next((it.get("country") for it in items if it.get("country") and it.get("country") != "Global"), canonical_item.get("country") or "Global")
-        relationship_type = next((it.get("relationship_type") for it in items if it.get("relationship_type")), canonical_item.get("relationship_type") or "Subsidiary")
+        relationship_type = "Primary Entity" if is_primary else next((it.get("relationship_type") for it in items if it.get("relationship_type")), canonical_item.get("relationship_type") or "Subsidiary")
         ownership = next((it.get("ownership") for it in items if it.get("ownership")), canonical_item.get("ownership") or "Wholly-owned")
         confidence = max(float(it.get("confidence") or 0.80) for it in items)
 

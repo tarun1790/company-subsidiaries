@@ -92,8 +92,11 @@ async def evidence_fusion_agent(state: AgentState) -> AgentState:
         if not clean_n:
             continue
         key = get_base_name_key(clean_n)
-        if not key or key == parent_key:
+        if not key:
             continue
+        if key == parent_key:
+            sub["relationship_type"] = "Primary Entity"
+            
         sub["name"] = clean_n
         grouped.setdefault(key, []).append(sub)
         

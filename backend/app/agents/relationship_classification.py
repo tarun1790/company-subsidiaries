@@ -1,71 +1,95 @@
 import re
+import asyncio
 from typing import Dict, List, Any
+from pydantic import BaseModel, Field
 from app.agents.state import AgentState
+from app.agents.llm import get_llm
+from langchain_core.prompts import ChatPromptTemplate
 from app.core.logging import logger
 
+class RelationshipCheck(BaseModel):
+    is_subsidiary: bool = Field(description="Is this entity genuinely a subsidiary, brand, or joint venture of the parent company? (False if it is a competitor, news outlet, unrelated company, or sentence fragment)")
+    relationship_type: str = Field(description="Direct Subsidiary, Holding Company, Brand, Joint Venture, Excluded, or Mentioned Entity")
+
+async def verify_relationship_llm(parent: str, entity: str, evidences: List[Dict]) -> str:
+    if not evidences:
+        return "Direct Subsidiary" # fallback
+    
+    contexts = [ev.get("extracted_text") or str(ev) for ev in evidences[:3]]
+    context_str = "\n".join(contexts)
+    
+    llm = get_llm(capability="classification")
+    structured_llm = llm.with_structured_output(RelationshipCheck)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are an expert corporate intelligence analyst. Analyze the relationship between the Parent Company and the Entity based ONLY on the provided context evidence. If the Entity is a competitor, a news publisher reporting on the parent, a generic technology/service provider, or a random sentence fragment, set is_subsidiary=False and relationship_type='Excluded'. Otherwise, classify its relationship type."),
+        ("user", "Parent: {parent}\nEntity: {entity}\nContext:\n{context}")
+    ])
+    
+    try:
+        res = await (prompt | structured_llm).ainvoke({"parent": parent, "entity": entity, "context": context_str})
+        if not res.is_subsidiary or res.relationship_type in ["Excluded", "Mentioned Entity"]:
+            return "Excluded"
+        return res.relationship_type
+    except Exception as e:
+        logger.warning(f"Relationship LLM failed for {entity}: {e}")
+        return "Direct Subsidiary"
+
 async def relationship_classification_agent(state: AgentState) -> AgentState:
-    """Agent 10: Classifies verified candidate links into Direct, Indirect, Brand, JV, or Holdings."""
+    """Agent 10: Classifies verified candidate links using an LLM to drop competitors and non-subsidiaries."""
     logs = state.get("logs") or []
     warnings = state.get("warnings") or []
     subs = state.get("subsidiaries") or state.get("normalized_entities") or []
     legal_name = state.get("company_info", {}).get("legal_name") or state.get("query")
     
-    logs.append("Running Relationship Classification Agent...")
+    logs.append("Running Relationship Classification Agent (LLM Verification)...")
     
     if not subs:
-        msg = "RELATIONSHIP_CLASSIFICATION_ZERO_OUTPUT: No candidate entities available to classify."
-        logs.append(msg)
-        warnings.append({"stage": "relationship_classification", "code": "ZERO_OUTPUT", "message": msg})
-        return {
-            "relationships": [],
-            "logs": logs,
-            "warnings": warnings
-        }
+        return {"relationships": [], "logs": logs, "warnings": warnings}
 
     relationships = []
     classified_subs = []
     
-    for s in subs:
+    async def process_sub(s):
         name = s.get("name", "")
-        name_lower = name.lower()
         ownership = str(s.get("ownership", "")).lower()
+        evidences = s.get("evidences", [])
         
-        if "holding" in name_lower or "securit" in name_lower:
-            rel_type = "Holding Company"
-        elif "brand" in name_lower or "trade" in name_lower:
-            rel_type = "Brand"
-        elif "joint" in name_lower or "jv" in name_lower or "venture" in name_lower:
-            rel_type = "Joint Venture"
-        elif "office" in name_lower or "branch" in name_lower:
-            rel_type = "Regional Office"
-        elif "acquisition" in name_lower or "acquired" in name_lower:
-            rel_type = "Acquired Company"
-        elif "operating" in name_lower or "operat" in name_lower:
-            rel_type = "Operating Company"
-        elif "division" in name_lower or "business" in name_lower:
-            rel_type = "Business Unit"
-        else:
-            if "%" in ownership:
-                try:
-                    pct = float(re.findall(r'(\d+)', ownership)[0])
-                    rel_type = "Minority Investment" if pct < 50 else "Direct Subsidiary"
-                except Exception:
-                    rel_type = "Direct Subsidiary"
+        if name.lower() == legal_name.lower() or s.get("relationship_type") == "Primary Entity":
+            s["relationship_type"] = "Primary Entity"
+            return s
+            
+        # If the source is SEC Exhibit 21, it's definitely a subsidiary
+        is_sec = any("SEC" in str(ev.get("source_type", "")) for ev in evidences)
+        
+        if is_sec:
+            if "holding" in name.lower() or "securit" in name.lower():
+                rel_type = "Holding Company"
             else:
                 rel_type = "Direct Subsidiary"
-                
+        else:
+            rel_type = await verify_relationship_llm(legal_name, name, evidences)
+            
         s["relationship_type"] = rel_type
-        classified_subs.append(s)
+        return s
         
+    tasks = [process_sub(s) for s in subs]
+    results = await asyncio.gather(*tasks)
+    
+    for s in results:
+        rel_type = s.get("relationship_type", "Excluded")
+        if rel_type == "Excluded":
+            continue
+            
+        classified_subs.append(s)
         relationships.append({
             "source": s.get("parent") or legal_name,
-            "target": name,
+            "target": s.get("name"),
             "relationship_type": rel_type,
             "ownership": s.get("ownership", "100%"),
             "confidence": s.get("confidence", 0.85)
         })
 
-    logs.append(f"Relationship Classification produced {len(relationships)} classified relationship edges.")
+    logs.append(f"Relationship Classification produced {len(relationships)} valid verified relationship edges.")
     return {
         "subsidiaries": classified_subs,
         "relationships": relationships,

@@ -20,7 +20,12 @@ class CostOptimizer:
         "ago", "latest", "news", "balance sheet", "last filed", "days ago", 
         "controlling stake", "e-commerce leader", "top startup", "get real-time", 
         "updates on", "read more", "filed on", "share capital", "financial year", 
-        "annual report", "competitor", "competing", "market share", "held a", "holding a"
+        "annual report", "competitor", "competing", "market share", "held a", "holding a",
+        "which", "owned by", "part of", "visit website", "claim"
+    }
+
+    GENERIC_PHRASES = {
+        "structure chart", "consulting.", "cloud &", "called ", "and listed", "as well as", "with the"
     }
 
     @classmethod
@@ -59,15 +64,24 @@ class CostOptimizer:
                     
         # 4. Check for sentence stopword contamination
         s_lower = s.lower()
-        if any(f" {sw} " in f" {s_lower} " for sw in cls.STOPWORDS):
+        if any(f" {sw} " in f" {s_lower} " or s_lower.startswith(f"{sw} ") or s_lower.endswith(f" {sw}") for sw in cls.STOPWORDS):
             return None
             
-        # 5. Reject if word count > 6 or too short
+        # 5. Reject if it starts with a lowercase letter
+        if s and s[0].islower():
+            return None
+            
+        # 6. Reject if it contains typical sentence punctuation
+        if re.search(r'[,!:]', s) or ('.' in s and not re.search(r'\b(Inc|Ltd|Corp|Co|LLC|Pvt|S\.A\.P\.I\.|S\.R\.L\.|S\.A\.)\.$', s, re.IGNORECASE)):
+            # Be careful with periods, only reject if it's not a standard legal suffix period
+            return None
+
+        # 7. Reject if word count > 8 or too short
         words = s.split()
-        if len(words) > 6 or len(s) < 3:
+        if len(words) > 8 or len(s) < 3:
             return None
             
-        # 6. Reject if it matches parent company name
+        # 8. Reject if it matches parent company name
         p_lower = parent_name.lower().strip()
         if s_lower == p_lower or s_lower == p_lower.replace("inc", "").replace("corp", "").strip():
             return None

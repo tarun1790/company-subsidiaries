@@ -39,29 +39,38 @@ def get_calibrated_authority(source_type: str) -> float:
     return CALIBRATED_SOURCE_RELIABILITY["default"]
 
 def calculate_9_factor_confidence(sub: Dict[str, Any]) -> float:
-    """Calculates mathematical confidence score based on source credibility tiers."""
+    """Calculates mathematical confidence score based on additive source credibility tiers."""
     evidences = sub.get("evidences") or []
     if not evidences:
-        return 0.35
+        return 0.20
         
-    authority_scores = [get_calibrated_authority(ev.get("source_type", "")) for ev in evidences]
-    max_authority = max(authority_scores)
+    score = 0.40 # Base score for any extracted entity
+    unique_sources = set()
     
-    unique_sources = set(ev.get("source_type") for ev in evidences if ev.get("source_type"))
-    src_count = len(unique_sources)
-    
-    # Multi-source boost: Tier 1 + Official Website / MCA -> 95%+
-    if src_count >= 2 and max_authority >= 0.85:
-        final_score = min(0.98, max_authority + 0.05)
-    elif max_authority >= 0.85:
-        final_score = max_authority
-    elif max_authority >= 0.70:
-        final_score = 0.70 if src_count == 1 else 0.78
-    elif src_count == 1 and max_authority <= 0.45:
-        final_score = 0.35
-    else:
-        final_score = max_authority
+    for ev in evidences:
+        src = (ev.get("source_type") or "").lower()
+        if src not in unique_sources:
+            unique_sources.add(src)
+            if any(k in src for k in ["sec", "edgar", "exhibit 21"]):
+                score += 0.45
+            elif any(k in src for k in ["annual report", "pdf", "10-k"]):
+                score += 0.45
+            elif "mca" in src or "gleif" in src or "lei" in src or "registry" in src or "opencorporates" in src:
+                score += 0.35
+            elif any(k in src for k in ["official website", "investor", "domain"]):
+                score += 0.25
+            elif "wikipedia" in src:
+                score += 0.15
+            elif any(k in src for k in ["web research", "news", "search"]):
+                score += 0.15
+            else:
+                score += 0.10
+                
+    # Boost if there are multiple distinct sources
+    if len(unique_sources) >= 2:
+        score += 0.10
         
+    final_score = min(1.0, score)
     return round(final_score, 2)
 
 async def confidence_scoring_agent(state: AgentState) -> AgentState:
@@ -75,13 +84,13 @@ async def confidence_scoring_agent(state: AgentState) -> AgentState:
     for sub in subs:
         score = calculate_9_factor_confidence(sub)
         
-        # Discard low-confidence single-snippet noise items (< 40%)
-        if score < 0.40:
+        # Discard only extremely low confidence noise (< 20%)
+        if score < 0.20:
             continue
             
-        if score >= 0.85:
+        if score >= 0.80:
             band = "Confirmed"
-        elif score >= 0.65:
+        elif score >= 0.50:
             band = "Probable"
         else:
             band = "Unverified"

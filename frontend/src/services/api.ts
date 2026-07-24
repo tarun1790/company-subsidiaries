@@ -113,22 +113,15 @@ const isGithubPages = () => {
   return window.location.hostname.includes('github.io');
 };
 
-const ACTIVE_CLOUDFLARE_URL = 'https://every-bath-mercy-attend.trycloudflare.com';
+const ACTIVE_CLOUDFLARE_URL = 'https://edited-protein-represent-perceived.trycloudflare.com';
 
-const getBackendUrl = () => {
+export const getBackendUrl = () => {
   const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   if (isLocal) {
     return 'http://localhost:8000';
   }
-  const saved = localStorage.getItem('backend_url');
-  if (saved && (saved.includes('loca.lt') || saved.includes('trycloudflare.com'))) {
-    localStorage.removeItem('backend_url');
-  } else if (saved) {
-    return saved;
-  }
-  if (isGithubPages()) {
-    return ACTIVE_CLOUDFLARE_URL;
-  }
+  // Clear any stale local storage overrides to ensure live connection
+  localStorage.removeItem('backend_url');
   return ACTIVE_CLOUDFLARE_URL;
 };
 

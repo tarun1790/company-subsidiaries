@@ -204,7 +204,7 @@ class SECEdgarClient:
         return None
 
     def parse_exhibit_21_html(self, html_content: str) -> List[Dict[str, Any]]:
-        """Parses the HTML text of Exhibit 21 to extract subsidiary names and locations."""
+        """Parses the HTML text of Exhibit 21 to extract all subsidiary names and locations."""
         subsidiaries = []
         soup = BeautifulSoup(html_content, "html.parser")
         
@@ -218,40 +218,54 @@ class SECEdgarClient:
             for row in rows:
                 cols = [col.get_text(strip=True) for col in row.find_all(["td", "th"])]
                 cols = [c for c in cols if c]
+                if not cols:
+                    continue
+                
+                name = cols[0]
+                name_lower = name.lower()
+                if name_lower in ["name", "company", "subsidiary", "entity", "jurisdiction", "country", "state", "ownership", "percent", "shares", "legal name", "parent"]:
+                    continue
+                if any(h in name_lower for h in ["name of", "subsidiary", "jurisdiction", "state of", "country of", "incorporation", "percent owned", "legal name", "parent"]):
+                    continue
+                
+                # Robust right-to-left scan to isolate jurisdiction and percentage
+                jurisdiction = "Global"
+                percent = "Not Publicly Disclosed"
+                
                 if len(cols) >= 2:
-                    # Look for typical formats: [Name, Jurisdiction] or [Name, Percent, Jurisdiction]
-                    name = cols[0]
-                    name_lower = name.lower()
-                    if name_lower in ["name", "company", "subsidiary", "entity", "jurisdiction", "country", "state", "ownership", "percent", "shares", "legal name", "parent"]:
-                        continue
-                    if any(h in name_lower for h in ["name of", "subsidiary", "jurisdiction", "state of", "country", "incorporation", "percent owned", "legal name", "parent"]):
-                        continue
-                    
-                    # Robust right-to-left scan to isolate jurisdiction and percentage
-                    jurisdiction = "Unknown"
-                    percent = "Not Publicly Disclosed"
-                    
-                    if len(cols) >= 2:
-                        candidates = cols[1:]
-                        for c in reversed(candidates):
-                            c_clean = c.strip()
-                            if not c_clean:
-                                continue
-                            # If cell is percent symbol, numeric value or matches typical percentage pattern
-                            if re.search(r'%\s*$', c_clean) or c_clean.isdigit() or re.match(r'^\d{1,3}(?:\.\d+)?$', c_clean):
-                                if percent == "Not Publicly Disclosed":
-                                    percent = c_clean
-                                else:
-                                    percent = f"{c_clean} {percent}"
+                    candidates = cols[1:]
+                    for c in reversed(candidates):
+                        c_clean = c.strip()
+                        if not c_clean:
+                            continue
+                        if re.search(r'%\s*$', c_clean) or c_clean.isdigit() or re.match(r'^\d{1,3}(?:\.\d+)?$', c_clean):
+                            if percent == "Not Publicly Disclosed":
+                                percent = c_clean
                             else:
-                                jurisdiction = c_clean
-                                break
-                                
-                    # Clean name (remove extra spaces, characters)
-                    clean_name = re.sub(r'\s+', ' ', name).strip()
-                    clean_juri = re.sub(r'\s+', ' ', jurisdiction).strip()
-                    
-                    if len(clean_name) > 3 and len(clean_juri) > 2 and clean_juri.lower() not in ["unknown"]:
+                                percent = f"{c_clean} {percent}"
+                        else:
+                            jurisdiction = c_clean
+                            break
+                
+                # Check for parenthesis in name e.g. "Netflix Services B.V. (Netherlands)"
+                paren_match = re.search(r'\(([^)]+)\)', name)
+                if paren_match and jurisdiction in ["Global", "Unknown"]:
+                    jurisdiction = paren_match.group(1).strip()
+                    name = re.sub(r'\([^)]+\)', '', name).strip()
+                            
+                # Clean name (remove extra spaces, characters)
+                clean_name = re.sub(r'\s+', ' ', name).strip()
+                clean_juri = re.sub(r'\s+', ' ', jurisdiction).strip() if jurisdiction else "Global"
+                
+                # Filter out pure legal headers or garbage lines
+                if len(clean_name) > 3 and not clean_name.lower().startswith(("exhibit 21", "schedule", "item ", "part ", "index to")):
+                    # Validate candidate using CostOptimizer if available
+                    try:
+                        from app.agents.cost_optimizer import CostOptimizer
+                        clean_name = CostOptimizer.sanitize_and_clean_entity_name(clean_name, "Parent") or clean_name
+                    except Exception:
+                        pass
+                    if clean_name:
                         subsidiaries.append({
                             "name": clean_name,
                             "country": clean_juri,
@@ -260,26 +274,33 @@ class SECEdgarClient:
                             "notes": "Extracted from SEC EDGAR Exhibit 21 table structure."
                         })
 
-        # Fallback if no tables or tables returned no subsidiaries: use regex on lines
-        if not subsidiaries:
-            lines = text.split("\n")
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                # Match lines containing a company name and a state/country suffix/parenthesis or tab separation
-                # e.g., "Microsoft Ireland Operations Limited (Ireland)" or "Microsoft Corp. - Delaware"
-                match = re.search(r"([A-Za-z0-9\s\.,&'\-\(\)]+)\s+[\(-\u2013]\s*([A-Z][A-Za-z\s\.]+)\s*\)?", line)
-                if match:
-                    name = match.group(1).strip()
-                    jurisdiction = match.group(2).strip()
-                    if len(name) > 3 and len(jurisdiction) > 2 and not any(h in name.lower() for h in ["name", "subsidiary", "jurisdiction", "incorporation"]):
+        # Run line-by-line regex matching to capture non-table entries or additional lists
+        lines = text.split("\n")
+        seen_names = set(s["name"].lower() for s in subsidiaries)
+        for line in lines:
+            line = line.strip()
+            if not line or len(line) < 5:
+                continue
+            # Match lines containing a company name ending in legal suffix or state/country in parenthesis/dash
+            match = re.search(r"([A-Za-z0-9\s\.,&'\-\(\)]+?\b(?:Inc|LLC|Ltd|Limited|Corp|Corporation|B\.V\.|GmbH|SAS|S\.L\.|S\.A\.|Pty|Pvt|Pte)\b)\s*(?:[\(-\u2013]\s*([A-Z][A-Za-z\s\.]+)\s*\)?)?", line, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                juri = match.group(2).strip() if match.group(2) else "Global"
+                name_key = name.lower()
+                if name_key not in seen_names and len(name) > 3:
+                    try:
+                        from app.agents.cost_optimizer import CostOptimizer
+                        name = CostOptimizer.sanitize_and_clean_entity_name(name, "Parent") or name
+                    except Exception:
+                        pass
+                    if name and name.lower() not in seen_names:
+                        seen_names.add(name.lower())
                         subsidiaries.append({
                             "name": name,
-                            "country": jurisdiction,
+                            "country": juri,
                             "ownership": "Not Publicly Disclosed",
                             "relationship_type": "Subsidiary",
-                            "notes": "Extracted from SEC EDGAR Exhibit 21 text line-match."
+                            "notes": "Extracted from SEC EDGAR Exhibit 21 line match."
                         })
                         
         return subsidiaries
