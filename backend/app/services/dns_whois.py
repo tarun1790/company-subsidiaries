@@ -114,4 +114,36 @@ class DNSWhoisResolver:
             logger.warning(f"Certificate Transparency lookup failed for {domain}: {str(e)}")
             return []
 
+    async def get_ssl_cert_info(self, domain: str) -> Dict[str, Any]:
+        """Inspects live SSL Certificate Subject Alternative Names (SANs) and Issuer via native Python ssl & socket."""
+        cache_key = f"ssl_cert:{domain}"
+        cached = await cache_manager.get_json(cache_key)
+        if cached:
+            return cached
+
+        info = {"san_domains": [], "issuer": None, "subject": None}
+        try:
+            import ssl
+            import socket
+
+            def _fetch_cert():
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = True
+                with socket.create_connection((domain, 443), timeout=5.0) as sock:
+                    with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
+                        return ssock.getpeercert()
+
+            cert = await asyncio.to_thread(_fetch_cert)
+            if cert:
+                san = cert.get("subjectAltName", ())
+                info["san_domains"] = list(set([item[1].lower() for item in san if item[0] == "DNS"]))
+                info["issuer"] = str(cert.get("issuer"))
+                info["subject"] = str(cert.get("subject"))
+
+            await cache_manager.set_json(cache_key, info, expire=86400 * 7)
+        except Exception as e:
+            logger.debug(f"Native SSL cert inspection failed for {domain}: {e}")
+
+        return info
+
 resolver = DNSWhoisResolver()

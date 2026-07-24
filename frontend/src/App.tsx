@@ -51,8 +51,20 @@ export const App: React.FC = () => {
       setPipelineState((prev) => {
         // Build running logs list
         const nextLogs = [...prev.stageLogs];
-        if (msg.log && !nextLogs.includes(msg.log)) {
-          nextLogs.push(msg.log);
+        if (msg.log) {
+          // If the msg log is updating a previous "Executing agent node: XYZ..." line with time
+          const match = msg.log.match(/^Executing agent node: (.+?)\.\.\. \(([\d.]+s)\)$/);
+          if (match) {
+            const baseLog = `Executing agent node: ${match[1]}...`;
+            const index = nextLogs.indexOf(baseLog);
+            if (index !== -1) {
+               nextLogs[index] = msg.log; // Replace it inline
+            } else if (!nextLogs.includes(msg.log)) {
+               nextLogs.push(msg.log);
+            }
+          } else if (!nextLogs.includes(msg.log)) {
+            nextLogs.push(msg.log);
+          }
         }
 
         const nextSubs = msg.live_subsidiaries && msg.live_subsidiaries.length > 0 ? msg.live_subsidiaries : prev.liveSubsidiaries;

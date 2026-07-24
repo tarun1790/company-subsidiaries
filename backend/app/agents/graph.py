@@ -137,6 +137,13 @@ def resilient_agent_node(node_name: str, timeout: float = 30.0):
                 duration_msg = f"[Node Completed] Node '{node_name}' finished in {duration:.2f} seconds."
                 logger.info(duration_msg)
                 
+                # Send the time suffix back to the frontend/cli hook
+                if hook and callable(hook):
+                    try:
+                        await hook(node_name, f"Executing agent node: {node_name}... ({duration:.1f}s)", state)
+                    except Exception:
+                        pass
+                
                 if not isinstance(res, dict):
                     res = {}
                 

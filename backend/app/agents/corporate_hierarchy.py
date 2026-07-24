@@ -8,7 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 class HierarchyNode(BaseModel):
     name: str = Field(description="Name of the entity.")
     parent: str = Field(description="Direct parent company of this entity.")
-    relationship_type: str = Field(description="Classification: Parent, Holding Company, Subsidiary, Division, Brand.")
+    relationship_type: str = Field(description="Classification: Parent Company, Subsidiary, Brand, Product, Business Unit, Affiliate, Joint Venture, Historical Entity.")
     depth: int = Field(description="Hierarchy depth level (0 for ultimate parent, 1 for direct child, 2 for nested child).")
 
 class HierarchyTree(BaseModel):
@@ -40,7 +40,7 @@ async def corporate_hierarchy_agent(state: AgentState) -> AgentState:
         "The ultimate parent company is {parent}.\n"
         "Examine the list of entities and determine if any should be children of other entities in the list (depth 2) "
         "rather than direct children of the parent (depth 1).\n"
-        "Classify each node: Parent (only for the ultimate parent), Holding Company, Subsidiary, Division, Brand.\n"
+        "Classify each node: Parent Company (only for the ultimate parent), Subsidiary, Brand, Product, Business Unit, Affiliate, Joint Venture, Historical Entity.\n"
         "Return a structured list of nodes with name, direct parent, type, and depth level."
     )
     

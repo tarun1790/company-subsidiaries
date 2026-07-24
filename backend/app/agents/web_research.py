@@ -1,3 +1,6 @@
+import asyncio
+import re
+import json
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from app.agents.state import AgentState
@@ -50,16 +53,39 @@ async def web_research_agent(state: AgentState) -> AgentState:
         for wq in wiki_queries:
             try:
                 loop = asyncio.get_running_loop()
-                # Fetch summary first
-                summary = await loop.run_in_executor(None, lambda: wikipedia.summary(wq, auto_suggest=True))
+                # Fetch summary first with auto_suggest=False to avoid DDG OpenSearch failures
+                def _get_wiki_sum(q):
+                    try:
+                        return wikipedia.summary(q, auto_suggest=False)
+                    except Exception:
+                        return None
+                summary = await loop.run_in_executor(None, _get_wiki_sum, wq)
                 if summary:
                     search_context += f"--- WIKIPEDIA ENTRY ({wq}) ---\n{summary}\n\n"
                     
-                # Try fetching full page content for subsidiary lists
+                # Fetch page content and extract targeted sections (subsidiaries, non-banking, international, operations)
                 try:
-                    page = await loop.run_in_executor(None, lambda: wikipedia.page(wq, auto_suggest=False))
+                    def _get_wiki_page(q):
+                        try:
+                            return wikipedia.page(q, auto_suggest=False)
+                        except Exception:
+                            return None
+                    page = await loop.run_in_executor(None, _get_wiki_page, wq)
                     if page and page.content:
-                        search_context += f"--- WIKIPEDIA FULL PAGE ({wq}) ---\n{page.content[:15000]}\n\n"
+                        sections = re.findall(r'==+\s*(.*?)\s*==+\n(.*?)(?===+|\Z)', page.content, re.DOTALL)
+                        relevant_sections = []
+                        keywords = ["subsidiary", "subsidiaries", "non-banking", "international", "operations", "domestic", "brands", "divisions", "acquisitions", "branches", "ventures", "associate", "affiliate", "group"]
+                        
+                        for heading, sec_text in sections:
+                            h_clean = heading.lower()
+                            if any(kw in h_clean for kw in keywords):
+                                relevant_sections.append(f"=== Wikipedia Section: {heading} ===\n{sec_text[:4000]}")
+                        
+                        if relevant_sections:
+                            logs.append(f"Extracted {len(relevant_sections)} targeted Wikipedia sections for '{wq}'.")
+                            search_context += "\n\n".join(relevant_sections) + "\n\n"
+                        else:
+                            search_context += f"--- WIKIPEDIA FULL PAGE ({wq}) ---\n{page.content[:6000]}\n\n"
                 except Exception:
                     pass
             except Exception as w_ex:
@@ -99,7 +125,7 @@ async def web_research_agent(state: AgentState) -> AgentState:
         search_queries = [
             f"{original_query} list of subsidiaries brands acquisitions companies",
             f"{legal_name} corporate portfolio brands arms business units",
-            f"{original_query} group companies list Myntra Cleartrip eKart Shopsy"
+            f"{original_query} list of group companies joint ventures operating divisions"
         ]
         
         if company_info.get("ticker"):
@@ -125,54 +151,50 @@ async def web_research_agent(state: AgentState) -> AgentState:
     except Exception as se:
         logger.warning(f"Web search error: {str(se)}")
 
-    # 4. Structured LLM Extraction for Brands & Subsidiaries
+    # 4. Vector Embedding & Chunk Retrieval via Qdrant & CrossEncoder
     if len(search_context.strip()) > 20:
         try:
-            # Structured LLM Extraction to capture operating brands (Myntra, Cleartrip, eKart, Shopsy, etc.)
-            llm = get_llm(capability="classification")
-            structured_llm = llm.with_structured_output(WebResearchOutput)
+            from app.services.vector_retrieval import VectorRetrievalService
+            vector_service = VectorRetrievalService()
             
+            # Chunk, generate vector embeddings, and index into Qdrant
+            await vector_service.index_document(doc_url=f"web_research_{legal_name}", text=search_context)
+            
+            # Retrieve top semantically relevant vector chunks
+            retrieved_chunks = await vector_service.retrieve_relevant_chunks(
+                query=f"{legal_name} subsidiaries brands acquisitions divisions business units non-banking international",
+                top_k=8,
+                rerank_k=4
+            )
+            
+            if retrieved_chunks:
+                focused_context = "\n\n".join([chunk["text"] for chunk in retrieved_chunks])
+                logs.append(f"Vector Retrieval: Selected top {len(retrieved_chunks)} reranked vector chunks ({len(focused_context)} chars) for LLM extraction.")
+            else:
+                focused_context = search_context[:3000]
+                
+            llm = get_llm(capability="classification")
             system_prompt = (
                 "You are an elite corporate intelligence officer.\n"
-                "Given the consolidated research context (Wikipedia, SSL certificates, Web search), "
-                "extract every verified subsidiary, acquisition, division, brand, or regional entity associated with the primary company.\n"
+                "Given the vector-retrieved research context, extract every verified subsidiary, acquisition, division, brand, or regional entity associated with the primary company.\n"
                 "CRITICAL RULES FOR EXTRACTION:\n"
                 "1. Be highly conservative: do not extract random client names, partners, or technologies as subsidiaries.\n"
-                "2. DO extract digital platforms, consumer brands, logistics arms, healthcare arms, B2B marketplaces, and social commerce apps (e.g. 'Myntra', 'Cleartrip', 'eKart', 'eKart Logistics', 'Flipkart Wholesale', 'Flipkart Health+', 'Shopsy', 'ANS Commerce', 'PhonePe') as core brands or business units owned by the parent.\n"
-                "3. DO NOT extract external companies (e.g. 'News Corporation', 'The New York Times Company', 'Amazon') mentioned for reference or competition.\n"
-                "4. DO NOT extract sentence fragments (e.g. 'owned by...', 'has dominated...'). Extract ONLY the proper noun name of the entity or brand.\n"
+                "2. DO extract digital platforms, consumer brands, logistics arms, healthcare arms, B2B marketplaces, and banking/insurance units as core entities owned by the parent.\n"
+                "3. DO NOT extract external competitors mentioned for reference.\n"
+                "4. DO NOT extract sentence fragments. Extract ONLY the proper noun name of the entity or brand.\n"
                 "5. If a name looks like a parsing error or gibberish, ignore it entirely."
             )
             
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("user", "Primary Company: {company}\n\nResearch Context:\n{context}")
-            ])
+            json_prompt = (
+                f"{system_prompt}\n\n"
+                "Return ONLY a valid JSON object with key 'entities' containing a list of objects with fields: name, country, relationship_type, source_citation, evidence_snippet.\n\n"
+                f"Primary Company: {legal_name}\nResearch Context:\n{focused_context}\n\nJSON:"
+            )
+            raw_res = await llm.ainvoke(json_prompt)
+            raw_text = raw_res.content if hasattr(raw_res, 'content') else str(raw_res)
             
-            chain = prompt | structured_llm
-            result = None
-            try:
-                result = await chain.ainvoke({
-                    "company": legal_name,
-                    "context": search_context[:25000]
-                })
-            except Exception as st_err:
-                logger.warning(f"Structured LLM failed, falling back to raw JSON parsing: {st_err}")
-
-            # Fallback if with_structured_output returned 0 entities (typical for local ChatOllama)
-            if not result or not result.entities:
-                logger.info("Structured output returned 0 entities. Running raw JSON extraction fallback...")
-                json_prompt = (
-                    f"{system_prompt}\n\n"
-                    "Return ONLY a valid JSON object with key 'entities' containing a list of objects with fields: name, country, relationship_type, source_citation, evidence_snippet.\n\n"
-                    f"Primary Company: {legal_name}\nResearch Context:\n{search_context[:15000]}\n\nJSON:"
-                )
-                raw_res = await llm.ainvoke(json_prompt)
-                raw_text = raw_res.content if hasattr(raw_res, 'content') else str(raw_res)
-                
-                import json
-                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-                if match:
+            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            if match:
                     try:
                         parsed_json = json.loads(match.group(0))
                         ent_list = parsed_json.get("entities") or parsed_json.get("subsidiaries") or []
@@ -207,7 +229,7 @@ async def web_research_agent(state: AgentState) -> AgentState:
                     except Exception as pe:
                         logger.warning(f"Failed to parse raw JSON from Ollama: {pe}")
 
-            if result and result.entities:
+            if 'result' in locals() and result and hasattr(result, 'entities') and result.entities:
                 for entity in result.entities:
                     discovered.append({
                         "name": entity.name,

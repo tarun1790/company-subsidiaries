@@ -102,16 +102,43 @@ async def public_registry_agent(state: AgentState) -> AgentState:
             except Exception as ge:
                 logger.error(f"GLEIF registry lookup failed for {name}: {str(ge)}")
 
-        logs.append(f"Retrieved {len(discovered)} registry matches.")
+        # Direct GLEIF Lookup for the main legal target
+        try:
+            logs.append(f"Querying GLEIF LEI Registry for '{legal_name}'...")
+            lei_code = company_info.get("lei")
+            search_term = lei_code if lei_code else legal_name
+            gleif_records = await gleif_client.search_lei(search_term)
+            for rec in gleif_records:
+                discovered.append({
+                    "name": rec["name"],
+                    "legal_name": rec["legal_name"],
+                    "country": rec["country"],
+                    "ownership": "Not Publicly Disclosed",
+                    "parent": legal_name,
+                    "relationship_type": "Primary Entity" if rec["name"].lower() == legal_name.lower() else "Subsidiary",
+                    "registration_number": rec["registration_number"],
+                    "confidence": 0.90,
+                    "evidences": [{
+                        "source_type": "Public Registry",
+                        "source_url": "https://www.gleif.org",
+                        "extracted_text": f"Matched GLEIF LEI Registry: {rec['name']} (LEI: {rec['registration_number']}, Country: {rec['country']})"
+                    }],
+                    "notes": rec["notes"]
+                })
+        except Exception as ge:
+            logger.debug(f"GLEIF main lookup failed for {legal_name}: {ge}")
+
+        logs.append(f"Extracted {len(discovered)} verified entities from Public Registries (GLEIF / OpenCorporates).")
         return {
             "registry_results": discovered,
-            "logs": logs
+            "logs": logs,
+            "errors": errors
         }
     except Exception as e:
-        error_msg = f"Public registry search error: {str(e)}"
+        error_msg = f"Public registry processing error: {str(e)}"
         logger.error(error_msg)
         return {
             "registry_results": [],
-            "logs": logs + [f"Error querying registries: {str(e)}"],
+            "logs": logs + [f"Error searching registries: {str(e)}"],
             "errors": [error_msg]
         }

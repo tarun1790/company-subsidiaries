@@ -49,6 +49,26 @@ async def report_agent(state: AgentState) -> AgentState:
             # Check for duplicates by name
             if not any(e.get("name") == sub.get("name") for e in entities_by_status[status]):
                 entities_by_status[status].append(sub)
+                
+    # Explicitly inject the Root Parent Node so it's not missing from the report
+    parent_node = {
+        "name": legal_name,
+        "legal_name": legal_name,
+        "relationship_type": "Parent Company",
+        "status": "Confirmed",
+        "confidence": company_info.get("confidence", 1.0),
+        "country": company_info.get("hq_country", "Global"),
+        "registration_number": company_info.get("cik") or company_info.get("lei") or "N/A",
+        "evidences": [{"source_type": "Authoritative Registry", "extracted_text": src} for src in company_info.get("evidence_sources", [])],
+        "parent": "None (Root)"
+    }
+    
+    # Prepend the root node to the Confirmed list
+    if not any(e.get("name") == legal_name for e in entities_by_status["Confirmed"]):
+        entities_by_status["Confirmed"].insert(0, parent_node)
+        
+    # Also create a complete list including the root node for Excel/CSV exports
+    full_export_list = [parent_node] + subsidiaries
 
     v3_report_data = {
         "report_metadata": {
@@ -73,9 +93,9 @@ async def report_agent(state: AgentState) -> AgentState:
 
     try:
         import asyncio
-        await asyncio.to_thread(ReportGenerator.generate_pdf, legal_name, company_info, subsidiaries, pdf_path)
-        await asyncio.to_thread(ReportGenerator.generate_excel, legal_name, subsidiaries, excel_path)
-        await asyncio.to_thread(ReportGenerator.generate_csv, subsidiaries, csv_path)
+        await asyncio.to_thread(ReportGenerator.generate_pdf, legal_name, company_info, full_export_list, pdf_path)
+        await asyncio.to_thread(ReportGenerator.generate_excel, legal_name, full_export_list, excel_path)
+        await asyncio.to_thread(ReportGenerator.generate_csv, full_export_list, csv_path)
         await asyncio.to_thread(ReportGenerator.generate_json_v3, v3_report_data, json_path)
         
         logs.append("Reports generated successfully.")

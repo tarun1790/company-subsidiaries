@@ -28,6 +28,8 @@ class ResolvedEntity(BaseModel):
     registration_number: Optional[str] = None
     cik: Optional[str] = None
     ticker: Optional[str] = None
+    is_sec_registered: bool = False
+    primary_jurisdiction: str = "US"
     aliases: List[str] = Field(default_factory=list)
     historical_names: List[str] = Field(default_factory=list)
     parent_company: Optional[str] = None
@@ -40,6 +42,8 @@ class EntityIntelligence(BaseModel):
     resolved_parent: Optional[str] = Field(None, description="If it's a brand/subsidiary, what is the ultimate parent company name?")
     domain: Optional[str] = Field(None, description="Official website domain")
     ticker: Optional[str] = Field(None, description="Public stock ticker if applicable")
+    is_sec_registered: bool = Field(False, description="Whether the company files Form 10-K/10-Q with the US SEC")
+    primary_jurisdiction: str = Field("US", description="Two-letter country code or name of headquarters jurisdiction, e.g. US, RU, IN, GB")
 
 class LegalAliasExtraction(BaseModel):
     legal_name: str = Field(description="The exact legal registered name")
@@ -125,30 +129,36 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
             ("user", "Query: {query}")
         ])
         try:
-            res = await (prompt | intel_llm).ainvoke({"query": query})
+            async def _run_intel():
+                try:
+                    return await (prompt | intel_llm).ainvoke({"query": query})
+                except Exception:
+                    raw_p = (
+                        "You are a corporate intelligence engine. Return ONLY a valid JSON object with keys: 'resolved_parent' (string), 'domain' (string), 'ticker' (string).\n"
+                        f"Query: {query}\nJSON:"
+                    )
+                    raw_res = await llm.ainvoke(raw_p)
+                    raw_text = raw_res.content if hasattr(raw_res, 'content') else str(raw_res)
+                    match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                    if match:
+                        pj = json.loads(match.group(0))
+                        return EntityIntelligence(
+                            is_brand_or_subsidiary=bool(pj.get("resolved_parent")),
+                            resolved_parent=pj.get("resolved_parent") or query,
+                            domain=pj.get("domain"),
+                            ticker=pj.get("ticker")
+                        )
+                    return None
+            res = await asyncio.wait_for(_run_intel(), timeout=10.0)
             if res and res.is_brand_or_subsidiary and res.resolved_parent:
                 parent_name = res.resolved_parent
                 domain = res.domain
                 ticker = res.ticker
             else:
-                # Raw JSON fallback for ChatOllama
-                raw_p = (
-                    "You are a corporate intelligence engine. Return ONLY a valid JSON object with keys: 'resolved_parent' (string), 'domain' (string), 'ticker' (string).\n"
-                    f"Query: {query}\nJSON:"
-                )
-                raw_res = await llm.ainvoke(raw_p)
-                raw_text = raw_res.content if hasattr(raw_res, 'content') else str(raw_res)
-                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-                if match:
-                    pj = json.loads(match.group(0))
-                    parent_name = pj.get("resolved_parent") or query
-                    domain = pj.get("domain")
-                    ticker = pj.get("ticker")
-                else:
-                    parent_name = query
+                parent_name = query
             logs.append(f"Detection Results -> Target: {parent_name}, Domain: {domain}, Ticker: {ticker}")
         except Exception as e:
-            logger.warning(f"Detection LLM failed: {e}")
+            logger.warning(f"Detection LLM failed or timed out: {e}")
             parent_name = query
             
     # Override query with parent if resolved
@@ -162,9 +172,9 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     reg_number = None
     lei = None
     
-    # Check GLEIF
+    # Check GLEIF with timeout
     try:
-        gleif_res = await gleif_client.search_lei(target_query)
+        gleif_res = await asyncio.wait_for(gleif_client.search_lei(target_query), timeout=5.0)
         if gleif_res:
             legal_name = gleif_res[0]["legal_name"]
             country = gleif_res[0].get("country", "Global")
@@ -177,7 +187,7 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     # If no LEI, check OpenCorporates
     if legal_name == target_query:
         try:
-            oc_res = await opencorporates.search_company(target_query)
+            oc_res = await asyncio.wait_for(opencorporates.search_company(target_query), timeout=5.0)
             if oc_res:
                 legal_name = oc_res[0].get("legal_name") or oc_res[0]["name"]
                 country = oc_res[0].get("country", country)
@@ -190,9 +200,8 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     cik = None
     logs.append(f"Stage 5 (CIK Lookup): Searching SEC for '{legal_name}' or ticker '{ticker}'...")
     try:
-        # Prefer ticker if available for exact SEC match
         sec_query = ticker if ticker else legal_name
-        sec_res = await sec_client.get_cik_by_name_or_ticker(sec_query)
+        sec_res = await asyncio.wait_for(sec_client.get_cik_by_name_or_ticker(sec_query), timeout=5.0)
         if sec_res and sec_res != "Not found" and not str(sec_res).startswith("SEC lookup"):
             cik = sec_res
             logs.append(f"SEC match found: CIK {cik}")
@@ -204,24 +213,77 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
     historical = []
     logs.append("Stage 6 (Alias Expansion): Searching for trade names and historical aliases...")
     try:
-        ddg = DuckDuckGoSearchRun()
-        search_text = await asyncio.to_thread(ddg.run, f"{legal_name} former names aliases trading as")
-        
-        llm = get_llm(capability="entity_resolution")
-        alias_llm = llm.with_structured_output(LegalAliasExtraction)
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "Extract the exact legal name, current aliases, and former/historical names from the search context. Return empty arrays if none found."),
-            ("user", "Company: {company}\\nContext:\\n{text}")
-        ])
-        ext = await (prompt | alias_llm).ainvoke({"company": legal_name, "text": search_text[:5000]})
-        aliases = ext.aliases
-        historical = ext.historical_names
+        async def _fetch_aliases():
+            ddg = DuckDuckGoSearchRun()
+            search_text = await asyncio.to_thread(ddg.run, f"{legal_name} former names aliases trading as")
+            llm = get_llm(capability="entity_resolution")
+            raw_p = (
+                "Extract former names and trading aliases as a JSON object with keys 'aliases' (list of strings) and 'historical_names' (list of strings).\n"
+                f"Company: {legal_name}\nContext:\n{search_text[:2000]}\nJSON:"
+            )
+            raw_res = await llm.ainvoke(raw_p)
+            raw_text = raw_res.content if hasattr(raw_res, 'content') else str(raw_res)
+            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            if match:
+                pj = json.loads(match.group(0))
+                return pj.get("aliases", []), pj.get("historical_names", [])
+            return [], []
+
+        aliases, historical = await asyncio.wait_for(_fetch_aliases(), timeout=8.0)
         if len(aliases) > 0 or len(historical) > 0:
             logs.append(f"Extracted {len(aliases)} aliases and {len(historical)} historical names.")
     except Exception as e:
-        logger.warning(f"Alias expansion failed: {e}")
+        logger.warning(f"Alias expansion failed or timed out: {e}")
 
-    # Stage 7: Source-Specific Search Planning
+    is_sec = bool(cik)
+    jurisdiction = country if country and country != "Unknown" else "US"
+
+    # Stage 7: Verification Scoring & Search Planning
+    score = 0
+    evidence_sources = []
+    
+    if domain:
+        score += 30
+        evidence_sources.append("Official Website")
+    if reg_number:
+        score += 30
+        evidence_sources.append("Government Registry")
+    if cik:
+        score += 25
+        evidence_sources.append("SEC EDGAR")
+    if lei:
+        score += 20
+        evidence_sources.append("GLEIF")
+    if ticker:
+        score += 15
+        evidence_sources.append("Stock Ticker")
+    if len(aliases) > 0 or len(historical) > 0:
+        score += 5
+        evidence_sources.append("Wikipedia")
+        
+    score = min(score, 100)
+    
+    if score >= 70:
+        verification_status = "Verified"
+    elif score >= 50:
+        verification_status = "Needs Review"
+    else:
+        verification_status = "Failed"
+        
+    if verification_status == "Failed":
+        logs.append(f"Verification failed. Confidence Score: {score}/100. Parent company could not be verified from authoritative sources.")
+        return {
+            **state,
+            "company_info": {
+                "status": "failed",
+                "error": "Parent company could not be verified from authoritative sources.",
+                "original_query": query,
+                "confidence_score": score,
+                "evidence_sources": evidence_sources
+            },
+            "logs": logs
+        }
+
     resolved = ResolvedEntity(
         query_used=query,
         canonical_company=parent_name if parent_name else legal_name,
@@ -231,19 +293,40 @@ async def entity_resolution_agent(state: AgentState) -> AgentState:
         registration_number=reg_number,
         cik=cik,
         ticker=ticker,
+        is_sec_registered=is_sec,
+        primary_jurisdiction=jurisdiction,
         aliases=aliases,
         historical_names=historical,
         parent_company=parent_name if parent_name and parent_name != legal_name else None,
-        confidence=1.0 if cik or reg_number else 0.7
+        confidence=score / 100.0
     )
     
     # Generate the fallback plan
     resolved.search_plan = generate_search_plan(resolved, query)
-    logs.append(f"Stage 7: Generated Fallback Search Plan: {resolved.search_plan}")
-
+    
+    company_info = {
+        "legal_name": resolved.legal_name,
+        "canonical_company": resolved.canonical_company,
+        "official_domain": resolved.official_domain,
+        "country": resolved.country,
+        "registration_number": resolved.registration_number,
+        "cik": resolved.cik,
+        "ticker": resolved.ticker,
+        "is_sec_registered": resolved.is_sec_registered,
+        "primary_jurisdiction": resolved.primary_jurisdiction,
+        "aliases": resolved.aliases,
+        "historical_names": resolved.historical_names,
+        "parent_company": resolved.parent_company,
+        "search_plan": resolved.search_plan,
+        "original_query": query,
+        "confidence": resolved.confidence,
+        "confidence_score": score,
+        "verification_status": verification_status,
+        "evidence_sources": evidence_sources,
+        "status": "success"
+    }
+    
     # Stage 8: Cache Saving
-    company_info = resolved.model_dump()
-    company_info["status"] = "success"
     # Attach lei explicitly to company_info dict so downstream nodes can use it directly
     if lei:
         company_info["lei"] = lei
